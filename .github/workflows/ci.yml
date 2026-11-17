@@ -1,0 +1,20 @@
+name: Verify IA Workforce
+on:
+  push:
+  pull_request:
+jobs:
+  validation:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+      - run: npm run test:domain
+      - run: npm run test:api
+      - run: pip install -r services/document-processor/requirements.txt pytest httpx
+      - run: python -m pytest services/document-processor/tests -q
+      - run: python scripts/verify_package.py

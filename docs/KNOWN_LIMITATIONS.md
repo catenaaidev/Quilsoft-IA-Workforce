@@ -1,0 +1,23 @@
+# Limitaciones conocidas de la entrega 0.1.0
+
+- **Entrega parcial, no plataforma empresarial productiva completa.** Se realizó la estructura funcional y el agente de Compras en código, pero no la integración end-to-end productiva.
+- No se pudieron descargar dependencias JS por DNS `EAI_AGAIN`; por tanto no existen compilación React/Workers, tests Vitest/Playwright ni lockfile npm comprobados. Se incluyen `package.json` y workflow CI para ejecutarlos en entorno conectado.
+- No se aplicaron migraciones ni se ejecutaron consultas SQL contra PostgreSQL real. Los contratos Data API y el Worker necesitan verificación sobre proyecto de pruebas.
+- No se verificaron el portal de Quilsoft ni el artefacto Claude como código fuente; no se imitan interfaces propietarias.
+- No se dispone de código ni configuración real del SSO central. JWT/JWKS es un contrato listo para conectar, pero no demuestra compatibilidad con el SSO actual. Faltan logout, revocación y rol central automático.
+- Loyal es un adaptador que **retorna unknown en producción**; el proceso está intencionadamente bloqueado. Las fichas sintéticas solo se usan en pruebas locales identificadas.
+- Mapeo oficial ERP desconocido: la BD parte sin mapeo validado y el CSV no se exporta. La fixture demo no es formato real.
+- Integración Microsoft Graph no probada; limitar lectura a un buzón y ensayar fallos/reintentos, control delta y volumen real.
+- Workflows, Queues, Durable Objects, AI Gateway, cron y Containers no se ejecutaron en una cuenta real; configuración requiere adaptación al plan y documentación vigente.
+- OCR de imágenes en Container optativo y apagado por defecto; depende de herramientas y de evaluación de precisión. La conversión Workers AI no garantiza extraer correctamente todos los PDF escaneados.
+- No hay detector antivirus, escaneo antimalware, validación avanzada contra ZIP bomb, servicio de cuarentena ni DLP.
+- La prueba de inyección de prompts real y benchmarking de precisión con OCs de múltiples clientes no se realizó.
+- El backend usa JWT y rol global; faltan controles por bodega/proceso/cliente, segregación de funciones y autorización específica por recurso.
+- La auditoría en PostgreSQL es append-only por trigger, pero no es criptográficamente encadenada ni cuenta con copia WORM independiente.
+- No existen pantallas completas para conocimiento/RAG, reportes financieros, aprobaciones de herramientas, flujos editables ni todas las automatizaciones futuras. No se presentan como implementados.
+- Faltan límites de gasto reales, métricas de IA por token, alertas y políticas de observabilidad.
+- Hay puntos con escrituras DB/R2 fuera de una misma transacción; se requieren reconciliación y pruebas de caos. La corrección de líneas sí usa RPC PostgreSQL transaccional.
+- El frontend no permite aún administrar el mapa oficial CSV desde UI, ni configura cron y Queue desde UI.
+- `applications assigned`/SSO menú global: integración visual lista, pero el botón real de regreso al menú central debe configurarse al estudiar la app SSO original.
+- En el procesador Python no se configuraron red privada, quotas ni scanning a nivel Container.
+- No se efectuó ningún despliegue productivo ni modificación de Cloudflare, Supabase, SSO, Loyal o ERP.

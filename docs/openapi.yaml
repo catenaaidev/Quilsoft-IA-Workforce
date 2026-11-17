@@ -1,0 +1,162 @@
+openapi: 3.0.3
+info:
+  title: IA Workforce Catena Zapata API
+  version: 0.1.0
+  description: Contratos de esta entrega parcial. Requiere identidad central y permisos en cada operación.
+servers:
+  - url: /api
+security:
+  - ssoBearer: []
+  - ssoCookie: []
+components:
+  securitySchemes:
+    ssoBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    ssoCookie:
+      type: apiKey
+      in: cookie
+      name: __Host-besa_sso
+  schemas:
+    Order:
+      type: object
+      properties:
+        id: {type: string, format: uuid}
+        orderNumber: {type: string, nullable: true}
+        client: {type: string, nullable: true}
+        issuedAt: {type: string, format: date, nullable: true}
+        status: {type: string, enum: [received, processing, review, blocked, approved, csv_generated, completed, error]}
+        version: {type: integer}
+    Line:
+      type: object
+      properties:
+        sku: {type: string}
+        description: {type: string}
+        quantity: {type: number}
+        unit: {type: string}
+        unitPrice: {type: number, nullable: true}
+        currency: {type: string}
+        technicalStatus: {type: string, enum: [approved, pending, rejected, missing, unknown]}
+paths:
+  /health:
+    get:
+      security: []
+      operationId: health
+      responses:
+        '200': {description: Estado del servicio, no estado de integraciones externas}
+  /me:
+    get:
+      operationId: currentUser
+      responses:
+        '200': {description: Identidad validada}
+        '401': {description: Sin token}
+        '403': {description: Aplicación no asignada}
+  /dashboard:
+    get:
+      operationId: dashboard
+      responses:
+        '200': {description: Conteos y actividad reciente}
+  /orders:
+    get:
+      operationId: listOrders
+      responses:
+        '200': {description: Órdenes autorizadas}
+    post:
+      operationId: createManualOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                orderNumber: {type: string}
+                client: {type: string}
+                issuedAt: {type: string, format: date}
+                lines:
+                  type: array
+                  items: {$ref: '#/components/schemas/Line'}
+      responses:
+        '201': {description: Orden creada para revisión}
+  /orders/{id}:
+    parameters:
+      - {name: id, in: path, required: true, schema: {type: string, format: uuid}}
+    get:
+      operationId: getOrder
+      responses:
+        '200': {description: Orden, líneas y validación}
+        '404': {description: No existe}
+    patch:
+      operationId: correctOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [version]
+              properties:
+                version: {type: integer}
+                client: {type: string}
+                orderNumber: {type: string}
+                issuedAt: {type: string, format: date}
+      responses:
+        '200': {description: Corregida con optimistic locking}
+        '409': {description: Conflicto de versión}
+  /orders/{id}/check-loyal:
+    post:
+      parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      operationId: checkLoyal
+      responses:
+        '200': {description: Estado por ficha. En producción sin API real devuelve unknown}
+  /orders/{id}/approve:
+    post:
+      parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      operationId: approveOrder
+      responses:
+        '200': {description: Aprobación controlada}
+        '409': {description: Bloqueada por reglas, validación o Loyal}
+  /orders/{id}/csv:
+    get:
+      parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      operationId: downloadCsv
+      responses:
+        '200': {description: CSV de mapeo oficial validado}
+    post:
+      parameters: [{name: id, in: path, required: true, schema: {type: string, format: uuid}}]
+      operationId: generateCsv
+      responses:
+        '200': {description: CSV generado, pendiente de carga manual}
+        '409': {description: Mapeo no aprobado u orden no aprobada}
+  /documents/upload:
+    post:
+      operationId: uploadOrderDocument
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, orderId]
+              properties:
+                file: {type: string, format: binary}
+                orderId: {type: string, format: uuid}
+      responses:
+        '202': {description: Documento en cola de análisis}
+        '413': {description: Tamaño no admitido}
+        '415': {description: Tipo o firma no admitidos}
+  /agents:
+    get:
+      operationId: listAgents
+      responses:
+        '200': {description: Agentes registrados}
+    post:
+      operationId: registerAgent
+      responses:
+        '201': {description: Nuevo agente en borrador, no automatización implementada}
+  /audit:
+    get:
+      operationId: listAudit
+      responses:
+        '200': {description: Eventos de auditoría de los últimos 100 eventos}

@@ -1,0 +1,10 @@
+ORDEN DE COMPRA FICTICIA
+Cliente: CLIENTE FICTICIO
+Orden: OC-PRUEBA-001
+Fecha: 2026-11-17
+Código: SKU-OK-1
+Descripción: Producto sintético de prueba
+Cantidad: 10 UN
+Precio unitario: ARS 2500
+TOTAL: ARS 25000
+DOCUMENTO FICTICIO. NO USAR COMO ORDEN COMERCIAL REAL.

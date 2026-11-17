@@ -1,0 +1,17 @@
+{
+  "$schema":"../../node_modules/wrangler/config-schema.json",
+  "name":"ia-workforce-catena",
+  "main":"src/index.ts",
+  "compatibility_date":"2026-11-17",
+  "compatibility_flags":["nodejs_compat"],
+  "workers_dev":false,
+  "assets":{"directory":"../web/dist","not_found_handling":"single-page-application","run_worker_first":["/api/*"]},
+  "ai":{"binding":"AI"},
+  "r2_buckets":[{"binding":"DOCS","bucket_name":"ia-workforce-docs-private"}],
+  "queues":{"producers":[{"binding":"JOBS","queue":"ia-workforce-documents"}],"consumers":[{"queue":"ia-workforce-documents","max_batch_size":5,"max_retries":4,"dead_letter_queue":"ia-workforce-documents-dlq"}]},
+  "workflows":[{"name":"ia-workforce-purchase-processing","binding":"PURCHASE_WORKFLOW","class_name":"PurchaseWorkflow"}],
+  "durable_objects":{"bindings":[{"name":"PURCHASE_AGENT","class_name":"PurchaseAgent"}]},
+  "migrations":[{"tag":"v1","new_sqlite_classes":["PurchaseAgent"]}],
+  "triggers":{"crons":["*/10 * * * *"]},
+  "vars":{"APP_ENV":"production","AI_MODEL":"@cf/meta/llama-3.3-70b-instruct-fp8-fast"}
+}

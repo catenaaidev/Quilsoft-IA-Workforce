@@ -1,0 +1,13 @@
+# Copiar a .dev.vars. NUNCA versionar secretos.
+APP_ENV=development
+SUPABASE_URL=https://TU_PROYECTO.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=REEMPLAZAR_SOLAMENTE_EN_ENTORNO_SERVIDOR
+SSO_ISSUER=https://sso.example.invalid
+SSO_JWKS_URL=https://sso.example.invalid/.well-known/jwks.json
+SSO_AUDIENCE=ia-workforce
+GRAPH_TENANT_ID=
+GRAPH_CLIENT_ID=
+GRAPH_CLIENT_SECRET=
+GRAPH_MAILBOX=
+DOC_PROCESSOR_URL=
+DOC_PROCESSOR_TOKEN=

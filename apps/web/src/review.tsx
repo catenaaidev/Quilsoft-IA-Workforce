@@ -1,0 +1,18 @@
+import { useEffect,useState } from 'react';
+import { useMutation,useQueryClient } from '@tanstack/react-query';
+import { api,Order,Line } from './api';
+import { Notice } from './components';
+export function OrderMetadataEditor({order}:{order:Order}) {
+ const qc=useQueryClient();const [number,setNumber]=useState(order.orderNumber||''),[client,setClient]=useState(order.client||''),[issuedAt,setIssuedAt]=useState(order.issuedAt||'');
+ useEffect(()=>{setNumber(order.orderNumber||'');setClient(order.client||'');setIssuedAt(order.issuedAt||'')},[order]);
+ const save=useMutation({mutationFn:()=>api(`/orders/${order.id}`,{method:'PATCH',body:JSON.stringify({version:order.version,orderNumber:number,client,issuedAt:issuedAt||undefined})}),onSuccess:()=>{qc.invalidateQueries({queryKey:['order',order.id]});qc.invalidateQueries({queryKey:['orders']})}});
+ if(['csv_generated','completed'].includes(order.status))return null;
+ return <div className="panel p-5"><h2 className="mb-4 font-bold">Corregir datos de cabecera</h2><div className="grid gap-3 md:grid-cols-3"><label><span className="label">Número de OC</span><input className="field" value={number} onChange={e=>setNumber(e.target.value)}/></label><label><span className="label">Cliente</span><input className="field" value={client} onChange={e=>setClient(e.target.value)}/></label><label><span className="label">Fecha emisión</span><input className="field" type="date" value={issuedAt} onChange={e=>setIssuedAt(e.target.value)}/></label></div><div className="mt-4"><button onClick={()=>save.mutate()} disabled={save.isPending} className="btn-secondary">Guardar correcciones</button></div>{save.isError&&<div className="mt-3"><Notice kind="error">{String(save.error)}</Notice></div>}</div>
+}
+export function LineEditor({order,line}:{order:Order;line:Line}) {
+ const qc=useQueryClient(),[opened,setOpened]=useState(false),[data,setData]=useState({...line});
+ useEffect(()=>{setData({...line})},[line]);
+ const save=useMutation({mutationFn:()=>api(`/orders/${order.id}/lines/${line.id}`,{method:'PATCH',body:JSON.stringify({version:order.version,sku:data.sku,description:data.description,quantity:Number(data.quantity),unit:data.unit,unitPrice:data.unitPrice===null?null:Number(data.unitPrice),currency:data.currency})}),onSuccess:()=>{setOpened(false);qc.invalidateQueries({queryKey:['order',order.id]});qc.invalidateQueries({queryKey:['orders']});}});
+ if(['csv_generated','completed'].includes(order.status))return null;
+ return <><button className="text-xs font-semibold text-brand-600 hover:underline" onClick={()=>setOpened(!opened)}>{opened?'Cancelar':'Corregir'}</button>{opened&&<div className="absolute left-0 right-0 z-10 mt-2 min-w-[440px] rounded-xl border bg-white p-5 shadow-xl"><div className="mb-3 text-sm font-bold">Corregir producto {line.sku}</div><div className="grid grid-cols-2 gap-3">{(['sku','description','quantity','unit','unitPrice','currency'] as const).map(key=><label key={key}><span className="label">{key}</span><input className="field" type={key==='quantity'||key==='unitPrice'?'number':'text'} step="any" value={data[key]??''} onChange={e=>setData(prev=>({...prev,[key]:key==='quantity'||key==='unitPrice'?Number(e.target.value):e.target.value}))}/></label>)}</div><p className="my-3 text-xs text-amber-700">Cualquier cambio anula la confirmación técnica anterior y requiere consultar Loyal nuevamente.</p><button disabled={save.isPending} onClick={()=>save.mutate()} className="btn-primary">Guardar producto</button>{save.isError&&<div className="mt-3"><Notice kind="error">{String(save.error)}</Notice></div>}</div>}</>
+}

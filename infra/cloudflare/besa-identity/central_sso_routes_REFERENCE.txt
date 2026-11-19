@@ -1,0 +1,48 @@
+// Drop-in route additions for the BESA central Worker. The SSO session remains authoritative.
+async function iawfAccess(env, principalId) {
+  return await env.DB.prepare("SELECT ar.role_code,p.email,p.given_name,p.family_name FROM applications a JOIN grants g ON g.application_id=a.id JOIN principals p ON p.id=g.principal_id JOIN application_roles ar ON ar.application_id=a.id AND ar.principal_id=g.principal_id WHERE a.code='quilsoft-ia-workforce' AND a.active=1 AND a.integrated=1 AND g.active=1 AND g.permission='open' AND p.status='approved' AND p.profile_completed_at IS NOT NULL AND g.principal_id=? AND (g.starts_at IS NULL OR g.starts_at<=date('now')) AND (g.expires_at IS NULL OR g.expires_at>=date('now')) AND (NOT EXISTS(SELECT 1 FROM application_wineries aw WHERE aw.application_id=a.id) OR EXISTS(SELECT 1 FROM application_wineries aw JOIN principal_wineries pw ON (pw.winery_code=aw.winery_code OR pw.winery_code='multibodega') WHERE aw.application_id=a.id AND pw.principal_id=g.principal_id)) LIMIT 1").bind(principalId).first();
+}
+
+// Insert inside besaCoreWorker.fetch after the host validation.
+if(path==='/apps/open/quilsoft-ia-workforce'&&req.method==='GET'){
+  const user=await identity(req,env);
+  if(!user)return new Response(null,{status:302,headers:{location:httpsOrigin+'/', 'cache-control':'no-store'}});
+  if(user.status!=='approved'||!user.profile_completed_at)return respond({error:'profile_not_approved'},403);
+  const role=await iawfAccess(env,user.principal_id);
+  if(!role||!['administrador','usuario','supervisor'].includes(role.role_code))return respond({error:'ia_workforce_not_assigned'},403);
+  const ticket=rand(32),ts=now();
+  await env.DB.prepare('INSERT INTO workforce_sso_tickets(token_hash,principal_id,auth_session_hash,created_at,expires_at,used) VALUES(?,?,?,?,?,0)').bind(await sha(ticket),user.principal_id,user.token,ts,ts+90).run();
+  await later(event(env.DB,user.principal_id,'iawf_app_launch'));
+  return new Response(null,{status:302,headers:{location:'https://quilsoft-ia-workforce.besa-junin.workers.dev/sso/start#'+ticket,'cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff'}});
+}
+if(path==='/api/sso/workforce/exchange'&&req.method==='POST'){
+  const body=await jsonBody(req),ticket=body?.ticket;
+  if(typeof ticket!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(ticket))return respond({error:'invalid_ticket'},403);
+  const ts=now(),hash=await sha(ticket);
+  const row=await env.DB.prepare("SELECT t.principal_id,t.auth_session_hash,s.expires_at AS auth_expires_at,s.created_at AS auth_created_at FROM workforce_sso_tickets t JOIN auth_sessions s ON s.token_hash=t.auth_session_hash AND s.principal_id=t.principal_id JOIN principals p ON p.id=t.principal_id WHERE t.token_hash=? AND t.used=0 AND t.expires_at>? AND s.expires_at>? AND p.status='approved' AND p.profile_completed_at IS NOT NULL LIMIT 1").bind(hash,ts,ts).first();
+  if(!row)return respond({error:'ticket_expired_or_revoked'},403);
+  const role=await iawfAccess(env,row.principal_id);
+  if(!role||!['administrador','usuario','supervisor'].includes(role.role_code))return respond({error:'not_assigned'},403);
+  const used=await env.DB.prepare('UPDATE workforce_sso_tickets SET used=1 WHERE token_hash=? AND used=0 AND expires_at>?').bind(hash,ts).run();
+  if(Number(used.meta?.changes||0)!==1)return respond({error:'ticket_reused'},403);
+  const token=rand(32),expires=Math.min(Number(row.auth_expires_at),ts+8*3600);
+  await env.DB.prepare('INSERT INTO app_runtime_sessions(token_hash,principal_id,auth_session_hash,app_code,created_at,expires_at,revoked) VALUES(?,?,?,?,?,?,0)').bind(await sha(token),row.principal_id,row.auth_session_hash,'quilsoft-ia-workforce',ts,expires).run();
+  return respond({ok:true,token,expires_at:expires},200,{'cache-control':'no-store'});
+}
+if(path==='/api/sso/workforce/check'&&req.method==='POST'){
+  const body=await jsonBody(req),token=body?.token;
+  if(typeof token!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(token))return respond({error:'unauthorized'},403);
+  const ts=now();
+  const row=await env.DB.prepare("SELECT r.principal_id,r.expires_at,s.created_at AS auth_created_at,p.email,p.given_name,p.family_name FROM app_runtime_sessions r JOIN auth_sessions s ON s.token_hash=r.auth_session_hash AND s.principal_id=r.principal_id JOIN principals p ON p.id=r.principal_id WHERE r.token_hash=? AND r.app_code='quilsoft-ia-workforce' AND r.revoked=0 AND r.expires_at>? AND s.expires_at>? AND p.status='approved' AND p.profile_completed_at IS NOT NULL LIMIT 1").bind(await sha(token),ts,ts).first();
+  if(!row)return respond({error:'unauthorized'},403);
+  const role=await iawfAccess(env,row.principal_id);
+  if(!role||!['administrador','usuario','supervisor'].includes(role.role_code))return respond({error:'not_assigned'},403);
+  if(role.role_code==='administrador'&&ts-Number(row.auth_created_at)>7*86400)return respond({error:'session_needs_reauthentication'},403);
+  return respond({ok:true,principal_id:row.principal_id,name:[row.given_name,row.family_name].filter(Boolean).join(' ')||row.email,app_role:role.role_code,expires_at:row.expires_at},200,{'cache-control':'no-store'});
+}
+if(path==='/api/sso/workforce/revoke'&&req.method==='POST'){
+  const body=await jsonBody(req),token=body?.token;
+  if(typeof token!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(token))return respond({error:'invalid_token'},403);
+  await env.DB.prepare("UPDATE app_runtime_sessions SET revoked=1 WHERE token_hash=? AND app_code='quilsoft-ia-workforce'").bind(await sha(token)).run();
+  return respond({ok:true},200,{'cache-control':'no-store'});
+}

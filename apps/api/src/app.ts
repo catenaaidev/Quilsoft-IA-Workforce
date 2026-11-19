@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import { validateOrder, generateCsv, sha256Hex, canTransition, matchesFileSignature } from '@workforce/domain';
-import { authenticate, requirePermission } from './auth';
+import { authenticate, requirePermission, centralRequest, APP_SESSION_COOKIE, sessionTokenFromCookie } from './auth';
 import { Store } from './store';
 import { checkLoyal } from './loyal';
 import type { Bindings, AppVariables, Actor } from './types';
@@ -18,6 +18,29 @@ function error(c:any,e:unknown) {
 }
 function can(actor:Actor,p:string){requirePermission(actor,p);}
 app.get('/api/health',c=>c.json({status:'ok',service:'ia-workforce',build:'0.1.0',productionReady:false}));
+// Unauthenticated endpoints for exchanging a single-use central SSO ticket.
+app.post('/api/sso/exchange',async c=>{
+ try {
+  const body=await c.req.json() as {ticket?:unknown};
+  if(typeof body?.ticket!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(body.ticket))return c.json({error:'INVALID_SSO_TICKET'},400);
+  const res=await centralRequest(c.env,'/api/sso/workforce/exchange',{ticket:body.ticket});
+  if(!res.ok)return c.json({error:'SSO_EXCHANGE_REJECTED'},401);
+  const reply=await res.json() as {ok?:boolean;token?:string;expires_at?:number};
+  if(!reply.ok||typeof reply.token!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(reply.token))return c.json({error:'SSO_INVALID_RESPONSE'},502);
+  const age=Math.max(0,Math.min(8*3600,Math.floor(Number(reply.expires_at||0)-Date.now()/1000)));
+  if(age<30)return c.json({error:'SSO_EXPIRED'},401);
+  c.header('Set-Cookie',`${APP_SESSION_COOKIE}=${reply.token}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=${age}`);
+  c.header('Cache-Control','no-store');
+  return c.json({ok:true});
+ }catch {return c.json({error:'SSO_UNAVAILABLE'},503);}
+});
+app.post('/api/sso/logout',async c=>{
+ const token=sessionTokenFromCookie(c.req.header('cookie')||'');
+ if(token){try{await centralRequest(c.env,'/api/sso/workforce/revoke',{token});}catch{}}
+ c.header('Set-Cookie',`${APP_SESSION_COOKIE}=; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=0`);
+ c.header('Cache-Control','no-store');
+ return c.json({ok:true});
+});
 app.use('/api/*',authenticate);
 app.get('/api/me',c=>c.json({actor:c.get('actor'),environment:c.env.APP_ENV}));
 app.get('/api/dashboard',async c=>{
@@ -206,5 +229,5 @@ app.post('/api/erp/masters/import',async c=>{try{
  await store.audit(c.get('actor').subject,'erp.masters_imported','erp',body.kind,{sourceVersion:body.sourceVersion,count:records.length});
  return c.json({imported:records.length,readOnly:true});
  }catch(e){return error(c,e);}});
-app.get('/api/integrations',async c=>{return c.json({graph:c.env.GRAPH_CLIENT_ID&&c.env.GRAPH_MAILBOX?'configured_not_verified':'pending',loyal:'contract_only',erp:'read_only_contract_pending',sso:c.env.SSO_JWKS_URL?'configured_not_verified':'pending',documentProcessor:c.env.DOC_PROCESSOR_URL?'configured_not_verified':'optional',csvMapping:'requires_official_validated_example'});});
+app.get('/api/integrations',async c=>{return c.json({graph:c.env.GRAPH_CLIENT_ID&&c.env.GRAPH_MAILBOX?'configured_not_verified':'pending',loyal:'contract_only',erp:'read_only_contract_pending',sso:c.env.IDENTITY?'configured_not_verified':'pending',documentProcessor:c.env.DOC_PROCESSOR_URL?'configured_not_verified':'optional',csvMapping:'requires_official_validated_example'});});
 export default app;

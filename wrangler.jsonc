@@ -1,12 +1,89 @@
 {
-  "name": "oc-worknet-m365-supabase",
-  "main": "src/index.js",
-  "compatibility_date": "2026-11-18",
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "quilsoft-ia-workforce",
+  "main": "apps/api/src/index.ts",
+  "compatibility_date": "2026-11-17",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
   "workers_dev": true,
-  "r2_buckets": [{"binding":"DOCS","bucket_name":"ia-workforce-docs-private"}],
-  "triggers": {"crons": ["0 */4 * * *"]},
+  "assets": {
+    "directory": "apps/web/dist",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": [
+      "/api/*"
+    ]
+  },
+  "ai": {
+    "binding": "AI"
+  },
+  "r2_buckets": [
+    {
+      "binding": "DOCS",
+      "bucket_name": "ia-workforce-docs-private"
+    }
+  ],
+  "queues": {
+    "producers": [
+      {
+        "binding": "JOBS",
+        "queue": "ia-workforce-documents"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "ia-workforce-documents",
+        "max_batch_size": 5,
+        "max_retries": 4,
+        "dead_letter_queue": "ia-workforce-documents-dlq"
+      }
+    ]
+  },
+  "workflows": [
+    {
+      "name": "ia-workforce-purchase-processing",
+      "binding": "PURCHASE_WORKFLOW",
+      "class_name": "PurchaseWorkflow"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "PURCHASE_AGENT",
+        "class_name": "PurchaseAgent"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "PurchaseAgent"
+      ]
+    }
+  ],
+  "triggers": {
+    "crons": [
+      "*/10 * * * *"
+    ]
+  },
   "vars": {
-    "MAILBOX": "exportorders@catenazapata.com",
-    "SUPABASE_URL": "https://wptqxlkpsliexnwpncng.supabase.co"
-  }
+    "APP_ENV": "production",
+    "AI_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ia-workforce-catena-db",
+      "database_id": "7ba8ba79-d374-46b9-af3c-cd7fa62b0125",
+      "migrations_dir": "infra/cloudflare/migrations"
+    }
+  ],
+  "preview_urls": false,
+  "services": [
+    {
+      "binding": "IDENTITY",
+      "service": "besa-identidad-central"
+    }
+  ]
 }

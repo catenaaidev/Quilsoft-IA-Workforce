@@ -1,21 +1,43 @@
 import type { Bindings } from './types';
 import type { Order, Line, CsvMapping } from '@workforce/domain';
 export type Row = Record<string, any>;
-/** Server-side Supabase Data API adapter. Service secret NEVER reaches the browser. */
+/** Server-side Cloudflare D1 adapter. Database is never exposed to the browser. */
 export class Store {
-  constructor(private env: Bindings) {
-    if (!env.SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) throw new Error('Supabase backend no configurado');
-    if (!/^https:\/\//.test(env.SUPABASE_URL)) throw new Error('Supabase requiere HTTPS');
-  }
+  constructor(private env:Bindings){if(!(env as any).DB)throw new Error("D1_NOT_CONFIGURED");}
   private async request(table:string, method='GET', query='', body?:unknown, options:Record<string,string>={}) {
-    const response=await fetch(`${this.env.SUPABASE_URL}/rest/v1/${table}${query?`?${query}`:''}`,{
-      method,headers:{apikey:this.env.SUPABASE_SERVICE_ROLE_KEY!,authorization:`Bearer ${this.env.SUPABASE_SERVICE_ROLE_KEY}`,
-        'Content-Type':'application/json',Prefer:'return=representation',...options},
-      body:body===undefined?undefined:JSON.stringify(body)
-    });
-    if(!response.ok) throw new Error(`DB ${table}: ${response.status}: ${(await response.text()).slice(0,250)}`);
-    if(response.status===204) return [];
-    return await response.json() as Row[];
+    const db=(this.env as Bindings & {DB:D1Database}).DB;
+    const known='app_memberships agents agent_instructions orders order_lines documents erp_csv_mappings generated_csvs integration_cursors erp_reference executions audit_events permission_catalog role_permissions agent_tools agent_tool_grants knowledge_sources automations received_emails order_approvals document_extractions integration_registry'.split(' ');
+    const field=(x:string)=>{if(!/^[a-z_]+$/.test(x))throw new Error('D1_INVALID_FIELD');return x;};
+    const val=(k:string,v:any)=>v===undefined?null:typeof v==='boolean'?(v?1:0):['details','extraction','extraction_json','config','metadata','access_policy','tool_contract'].includes(k)?JSON.stringify(v):v;
+    const normal=(r:any)=>{const o={...r};for(const k of ['details','extraction','extraction_json','config','metadata','access_policy','tool_contract'])if(typeof o[k]==='string'){try{o[k]=JSON.parse(o[k]);}catch{o[k]=null;}}for(const k of ['active','validated','approved'])if(o[k]!==undefined)o[k]=!!o[k];return o;};
+    if(table==='rpc/correct_order_line') {
+      const d=body as any,changes=d.p_changes||{},id=String(d.p_order),line=String(d.p_line),version=Number(d.p_version);
+      const map:Record<string,string>={sku:'sku',description:'description',quantity:'quantity',unit:'unit',unitPrice:'unit_price',currency:'currency'};
+      const keys=Object.keys(changes);if(keys.some(k=>!map[k]))throw new Error('INVALID_CHANGE');
+      const order=await db.prepare('SELECT version,status FROM orders WHERE id=?').bind(id).first<any>();
+      const found=await db.prepare('SELECT id FROM order_lines WHERE id=? AND order_id=?').bind(line,id).first<any>();
+      if(!order||order.version!==version||['csv_generated','completed'].includes(order.status)||!found)throw new Error('VERSION_CONFLICT');
+      const statements=[db.prepare('UPDATE orders SET version=version+1,status=?,updated_at=? WHERE id=? AND version=?').bind('review',new Date().toISOString(),id,version),db.prepare(`UPDATE order_lines SET ${keys.map(k=>map[k]+'=?').join(',')}${keys.length?',':''}technical_status=?,technical_checked_at=NULL WHERE id=? AND order_id=?`).bind(...keys.map(k=>val(map[k],changes[k])),'unknown',line,id),db.prepare('INSERT INTO audit_events(actor_subject,action,resource_type,resource_id,details) VALUES(?,?,?,?,?)').bind(String(d.p_actor),'order.line_corrected','order',id,JSON.stringify({lineId:line,fields:keys}))];
+      await db.batch(statements);return [];
+    }
+    if(!known.includes(table))throw new Error('D1_INVALID_TABLE');
+    const ps=new URLSearchParams(query),where:string[]=[],params:any[]=[];let sort='',limit=100;
+    for(const [k,v] of ps) {
+      if(k==='order'){const m=/^([a-z_]+)\.(asc|desc)$/.exec(v);if(!m)throw new Error('D1_INVALID_SORT');sort=` ORDER BY ${field(m[1])} ${m[2].toUpperCase()}`;}
+      else if(k==='limit')limit=Math.max(1,Math.min(1000,Number(v)||100));
+      else if(k!=='on_conflict'){if(!v.startsWith('eq.'))throw new Error('D1_INVALID_FILTER');where.push(`${field(k)}=?`);const p=v.slice(3);params.push(p==='true'?1:p==='false'?0:p);}
+    }
+    const filter=where.length?' WHERE '+where.join(' AND '):'';
+    if(method==='GET')return ((await db.prepare(`SELECT * FROM ${table}${filter}${sort} LIMIT ${limit}`).bind(...params).all<any>()).results||[]).map(normal);
+    if(method==='POST'){
+      const records=Array.isArray(body)?body:[body];const result:any[]=[];
+      for(const r of records){const item={...(r as Record<string,any>)};if(!item.id&&!['audit_events','app_memberships','integration_cursors','erp_reference','permission_catalog','role_permissions','integration_registry'].includes(table))item.id=crypto.randomUUID();const keys=Object.keys(item).filter(k=>item[k]!==undefined).map(field);const conflict=ps.get('on_conflict');let upsert='';if(conflict){const target=conflict.split(',').map(field);const updates=keys.filter(k=>!target.includes(k));upsert=` ON CONFLICT (${target.join(',')}) DO ${updates.length?'UPDATE SET '+updates.map(k=>k+'=excluded.'+k).join(','):'NOTHING'}`;}const sql=`INSERT INTO ${table}(${keys.join(',')}) VALUES(${keys.map(()=>'?').join(',')})${upsert} RETURNING *`;const row=await db.prepare(sql).bind(...keys.map(k=>val(k,item[k]))).first<any>();if(row)result.push(normal(row));}
+      return result;
+    }
+    if(method==='PATCH'){
+      const item=body as Record<string,any>,keys=Object.keys(item).filter(k=>item[k]!==undefined).map(field);if(!where.length||!keys.length)throw new Error('D1_UNSAFE_UPDATE');return ((await db.prepare(`UPDATE ${table} SET ${keys.map(k=>k+'=?').join(',')}${filter} RETURNING *`).bind(...keys.map(k=>val(k,item[k])),...params).all<any>()).results||[]).map(normal);
+    }
+    throw new Error('D1_UNSUPPORTED_METHOD');
   }
   list(table:string,query='order=created_at.desc&limit=100') { return this.request(table,'GET',query); }
   get(table:string,id:string) {return this.request(table,'GET',`id=eq.${encodeURIComponent(id)}&limit=1`).then(rows=>rows[0]||null);}

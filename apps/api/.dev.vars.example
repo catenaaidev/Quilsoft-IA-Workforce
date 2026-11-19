@@ -1,7 +1,7 @@
-# Copiar a .dev.vars. NUNCA versionar secretos.
+# Solo entorno local; no incluir credenciales reales en Git.
 APP_ENV=development
-SUPABASE_URL=https://TU_PROYECTO.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=REEMPLAZAR_SOLAMENTE_EN_ENTORNO_SERVIDOR
+# D1 se configura mediante el binding DB en apps/api/wrangler.jsonc.
+# El login central NO se considera integrado hasta validar su contrato JWT/JWKS.
 SSO_ISSUER=https://sso.example.invalid
 SSO_JWKS_URL=https://sso.example.invalid/.well-known/jwks.json
 SSO_AUDIENCE=ia-workforce

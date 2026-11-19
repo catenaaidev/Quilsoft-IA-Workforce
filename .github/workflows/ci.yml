@@ -11,10 +11,14 @@ jobs:
         with: {node-version: '22'}
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npm run build
       - run: npm run test:domain
       - run: npm run test:api
-      - run: pip install -r services/document-processor/requirements.txt pytest httpx
+      - run: npm run test:oc
+      - run: npm run deploy:check
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:web
+      - run: pip install -r services/document-processor/requirements.txt pytest httpx reportlab
       - run: python -m pytest services/document-processor/tests -q
       - run: python scripts/verify_package.py

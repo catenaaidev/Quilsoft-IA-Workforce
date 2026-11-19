@@ -1,0 +1,12 @@
+{
+  "name": "oc-worknet-m365-supabase",
+  "main": "src/index.js",
+  "compatibility_date": "2026-11-18",
+  "workers_dev": true,
+  "r2_buckets": [{"binding":"DOCS","bucket_name":"ia-workforce-docs-private"}],
+  "triggers": {"crons": ["0 */4 * * *"]},
+  "vars": {
+    "MAILBOX": "exportorders@catenazapata.com",
+    "SUPABASE_URL": "https://wptqxlkpsliexnwpncng.supabase.co"
+  }
+}

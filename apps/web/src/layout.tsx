@@ -9,6 +9,7 @@ const nav=[
  {to:'/',name:'Dashboard',icon:LayoutDashboard},
  {to:'/ordenes',name:'Órdenes de compra',icon:ClipboardList},
  {to:'/documentos',name:'Documentos',icon:FileText},
+ {to:'/fuentes-comerciales',name:'Fuentes comerciales',icon:FileText},
  {to:'/agentes',name:'Agentes de IA',icon:Bot},
  {to:'/ejecuciones',name:'Ejecuciones',icon:Activity},
  {to:'/integraciones',name:'Integraciones',icon:PlugZap},

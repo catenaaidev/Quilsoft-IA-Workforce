@@ -43,6 +43,60 @@ app.post('/api/sso/logout',async c=>{
 });
 app.use('/api/*',authenticate);
 app.get('/api/me',c=>c.json({actor:c.get('actor'),environment:c.env.APP_ENV}));
+
+// Commercial source files: read-only and access-controlled, separate from purchasing approvals.
+app.get('/api/commercial-sources',async c=>{
+ try {
+  can(c.get('actor'),'orders.read');
+  const result=await c.env.DB.prepare(`SELECT s.id,s.filename,s.kind,s.sheet_name,s.headers_json,s.imported_at,
+   (SELECT COUNT(*) FROM workforce_import_rows r WHERE r.source_id=s.id) AS row_count
+   FROM workforce_import_sources s ORDER BY s.filename,s.sheet_name`).all();
+  return c.json((result.results||[]).map((s:any)=>({id:s.id,filename:s.filename,kind:s.kind,sheetName:s.sheet_name,headers:JSON.parse(s.headers_json),importedAt:s.imported_at,rowCount:s.row_count})));
+ } catch(e){return error(c,e);}
+});
+app.get('/api/commercial-sources/:id/rows',async c=>{
+ try {
+  can(c.get('actor'),'orders.read');
+  const id=c.req.param('id');if(!/^[0-9a-f]{24}$/.test(id))return c.json({error:'INVALID_SOURCE'},400);
+  const source=await c.env.DB.prepare('SELECT id FROM workforce_import_sources WHERE id=?').bind(id).first();
+  if(!source)return c.json({error:'SOURCE_NOT_FOUND'},404);
+  const limit=Math.min(200,Math.max(1,Number(c.req.query('limit')||100)));
+  const offset=Math.max(0,Number(c.req.query('offset')||0));
+  const result=await c.env.DB.prepare('SELECT row_number,values_json FROM workforce_import_rows WHERE source_id=? ORDER BY row_number LIMIT ? OFFSET ?').bind(id,limit,offset).all();
+  return c.json((result.results||[]).map((r:any)=>({rowNumber:r.row_number,values:JSON.parse(r.values_json)})));
+ } catch(e){return error(c,e);}
+});
+// Authenticated, auditable smoke test: a real Workers AI inference, no business data or ERP writes.
+app.post('/api/agent-diagnostics/test',async c=>{
+ try {
+  can(c.get('actor'),'admin.agent');
+  if(!c.env.AI)return c.json({error:'AI_NOT_CONFIGURED'},503);
+  const started=Date.now();const model=c.env.AI_MODEL||'@cf/meta/llama-3.3-70b-instruct-fp8-fast';
+  try {
+   const answer=await c.env.AI.run(model,{messages:[{role:'system',content:'Sos un verificador técnico. Respondé con una palabra: OPERATIVO.'},{role:'user',content:'Comprobación de disponibilidad. No procesar información empresarial.'}],max_tokens:30,temperature:0});
+   const response=typeof answer==='string'?answer:String((answer as any)?.response||'');
+   if(!response.trim())throw new Error('EMPTY_AI_RESPONSE');
+   await new Store(c.env).insert('executions',{agent_slug:'technical-smoke-test',status:'completed',model,duration_ms:Date.now()-started,finished_at:new Date().toISOString()});
+   await new Store(c.env).audit(c.get('actor').subject,'agent.smoke_test','agent','purchase-orders',{ok:true,model});
+   return c.json({ok:true,model,durationMs:Date.now()-started});
+  } catch(e) {
+   await new Store(c.env).insert('executions',{agent_slug:'technical-smoke-test',status:'error',model,duration_ms:Date.now()-started,error:String(e).slice(0,250),finished_at:new Date().toISOString()});
+   return c.json({error:'AI_SMOKE_TEST_FAILED'},502);
+  }
+ } catch(e){return error(c,e);}
+});
+app.get('/api/agent-diagnostics',async c=>{
+ try {
+  can(c.get('actor'),'agents.read');
+  const [agent,run,documents]=await Promise.all([
+   c.env.DB.prepare('SELECT COUNT(*) AS n FROM agents').first<{n:number}>(),
+   c.env.DB.prepare('SELECT status,COUNT(*) AS n FROM executions GROUP BY status').all(),
+   c.env.DB.prepare('SELECT extraction_status,COUNT(*) AS n FROM documents GROUP BY extraction_status').all()
+  ]);
+  return c.json({configuredAgents:agent?.n||0,aiBinding:Boolean(c.env.AI),queueBinding:Boolean(c.env.JOBS),workflowBinding:Boolean(c.env.PURCHASE_WORKFLOW),r2Binding:Boolean(c.env.DOCS),executions:run.results||[],documents:documents.results||[],note:'Disponibilidad de bindings no equivale a una inferencia de IA verificada.'});
+ } catch(e){return error(c,e);}
+});
+
 app.get('/api/dashboard',async c=>{
  try{can(c.get('actor'),'orders.read');const orders=await new Store(c.env).listOrders();
   const byStatus=Object.fromEntries(['received','processing','review','blocked','approved','csv_generated','completed','error'].map(s=>[s,orders.filter(o=>o.status===s).length]));

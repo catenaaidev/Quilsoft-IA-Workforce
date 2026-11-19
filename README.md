@@ -1,51 +1,81 @@
-# OC Worknet / Loyal — MVP técnico (no productivo)
+# IA Workforce · Órdenes de compra · Microsoft 365 + Supabase
 
-Este repositorio contiene un **MVP ejecutable para Cloudflare Workers + D1**. Implementa importación controlada de CSV Worknet, almacenamiento y desglose de órdenes, deduplicación por número de OC, corrección de líneas, historial de auditoría, dashboard y bloqueo estricto de revisión/descarga mientras no exista evidencia real de aprobación en Loyal.
+## Estado real, 19 noviembre 2026
 
-**NO es el producto completo**. No interpreta aún OC originales PDF/Excel, no consulta correo ni Loyal y no permite descargar OC de la base hasta que el proveedor habilite una integración verificable. No se comunica con Worknet ni envía correos. No incluye datos reales ni aprobaciones ficticias.
+- Base Supabase existente **compras_erp_2025_2026** reactivada y migración `oc_worknet_mail_loyal_initial` aplicada y verificada.
+- El módulo conserva originales EML y adjuntos PDF, XLSX, XLS y CSV en el bucket R2 ya existente `ia-workforce-docs-private`, cuando se autorice el buzón.
+- Trae lectura incremental de Microsoft Graph **Mail.Read** (delta), control de duplicados por identificador de mensaje y adjunto, historial de sincronización y Cron cada 4 horas.
+- Trae tablero de recepción y OC, importador de CSV históricos compatible con 22 columnas de Worknet; las nuevas OC quedan bloqueadas.
+- **No** incluye todavía extracción semántica de PDF/XLSX a líneas de Worknet, integración real de Loyal, ni SSO corporativo. La exportación se encuentra **bloqueada por seguridad** hasta completar Loyal y revisión humana.
+- **No se desplegó** este paquete ni se sustituyó `quilsoft-ia-workforce`. Es un módulo aislado para publicar en un Worker distinto, probar y después integrar al proyecto existente con revisión de código.
 
-## Estado funcional
+## Cloudflare: Worker aislado para no reemplazar producción
 
-| Componente | Estado |
-| --- | --- |
-| Parseo CSV con 22 encabezados, `;`, comas decimales y formato de fechas | Implementado |
-| Conservación de CSV fuente en D1 y líneas por OC | Implementado (para MVP) |
-| Bloqueo conservador por estado de ficha desconocido | Implementado |
-| Historial por actor y versión de corrección | Implementado |
-| Tabla editable y revocación de revisión tras modificar | Implementado |
-| Descarga CSV con orden de columnas exacto | Implementado, **bloqueada** sin verificación de Loyal |
-| Correo empresarial de solo lectura | Pendiente de credenciales/contrato de API |
-| OCR y extracción de órdenes PDF/Excel | Pendiente de muestras reales |
-| Consulta Loyal, sincronización 4h y desbloqueo verificado | Interfaz deshabilitada hasta obtener API autorizada |
-| OAuth SSO, roles, permisos y almacenamiento empresarial de documentos | Pendiente antes de producción |
-| Maestros y Allocations, detección inteligente de correspondencias | Pendiente de archivos/validación |
-| Carga Worknet, escritura Loyal, envío de correos | Prohibido por diseño |
+El archivo `wrangler.jsonc` crea el Worker `oc-worknet-m365-supabase`; **no** usa el nombre `quilsoft-ia-workforce` ni modifica sus recursos preexistentes. Reutiliza el bucket R2 ya verificado. Cloudflare Build de Git requiere un token de usuario activo.
 
-## Puesta en marcha
+Comandos en la carpeta del proyecto:
 
-- Preparar un proyecto Workers usando la CLI **cf** de Cloudflare (comprobar su versión actual) y configurar el entrypoint `src/index.js`.
-- Crear una base D1 propia y vincularla al Worker mediante el nombre de binding **DB**. Ejecutar `migrations/0001_init.sql` contra esa D1 de desarrollo.
-- Configurar el secreto **ACCESS_TOKEN** con valor aleatorio de 24 caracteres o más. En ausencia de este valor, todo el API de datos devuelve 401.
-- Publicar el Worker en un entorno **de pruebas protegido**, ejecutar las rutas `/` y `/api/health`, y abrir el panel con el mismo token. No usar token estático compartido en producción: reemplazarlo por SSO/MFA y autorización por rol.
-- Importar `fixtures/WINEBOW_11-11.csv`; luego observar las 9 líneas y el bloqueo por fichas desconocidas.
-- La función `scheduled` está presente como **placeholder**, no consulta Loyal. No configurar el Cron Trigger como una sincronización funcional hasta implementar el cliente API de solo lectura.
+```powershell
+npm install
+npm test
+npx wrangler login
+npx wrangler deploy
+```
 
-El acceso a D1 y el secreto dependen de la configuración real del account de Cloudflare; **este ZIP no despliega ni crea recursos por sí solo**. El proyecto no necesita Supabase para el MVP si se usa D1. Si ya existe Supabase corporativo y conviene reutilizarlo, revisar políticas y conexiones antes de modificar la arquitectura.
+**Antes de desplegar, configurar secretos en el Worker nuevo** (nunca guardar secretos en Git):
 
-## Requisitos externos para completar la aplicación
+```powershell
+npx wrangler secret put M365_TENANT_ID
+npx wrangler secret put M365_CLIENT_ID
+npx wrangler secret put M365_CLIENT_SECRET
+npx wrangler secret put SUPABASE_SERVICE_KEY
+npx wrangler secret put ADMIN_API_TOKEN
+```
 
-1. Buzón M365 o Google Workspace dedicado, alta OAuth de lectura y administrador responsable. Sin permisos de envío, borrado ni modificación.
-2. Contrato/documentación autorizada de la API Loyal: endpoint, autenticación, mapeo de productos y estados, límites de consulta y modalidad para leer ficha/fecha de aprobación.
-3. Órdenes de compra originales en PDF/Excel más los CSV finales asociados para evaluar exactitud.
-4. Allocations y maestros Worknet, sus códigos de cliente, depósitos, condiciones y productos, con versiones oficiales.
-5. Confirmación de la equivalencia de lista `043` del Excel comercial versus `43` del CSV Worknet, y de la alternativa `543`.
-6. Vinculación con el SSO corporativo y matriz real de roles con acceso revocable.
-7. Definición de retención, cifrado, almacenamiento de originales y auditoría para despliegue productivo.
+`ADMIN_API_TOKEN`: cadena aleatoria fuerte de al menos 32 caracteres. Es solo acceso técnico al MVP. Para empleados de producción, sustituir por integración con `besa-identidad-central` y autorización por roles; no usar una contraseña compartida.
 
-## Notas de seguridad
+La variable pública `SUPABASE_URL` ya se encuentra en `wrangler.jsonc`; apuntará a `https://wptqxlkpsliexnwpncng.supabase.co`.
 
-- No se expone una API para poner manualmente `loyal_status=approved`.
-- Los intentos de exportar o revisar líneas sin aprobación real terminan en 409.
-- Los archivos se importan solo desde el dispositivo del operador en el MVP, sin correo asociado.
-- No se debe exponer el panel usando el secreto de pruebas en producción.
-- El importador rechaza OC repetidas de forma conservadora: no fusiona silenciosamente modificaciones del cliente.
+El secreto `SUPABASE_SERVICE_KEY` se obtiene del proyecto Supabase **solo para el servidor**. Nunca ponerlo en el frontend ni en Git. Si se desea aprovechar la autenticación central, el Worker debe validar la sesión de BESA antes de dar acceso a datos.
+
+### Microsoft Entra ID / Exchange Online: trabajo requerido por IT
+
+1. Registrar una app de tipo confidencial en el tenant del dominio `catenazapata.com`.
+2. Dar permiso de aplicación **Microsoft Graph > Mail.Read** y consentimiento administrativo (no `Mail.ReadWrite` ni `Mail.Send`).
+3. Limitar el permiso de aplicación al buzón `exportorders@catenazapata.com` mediante Exchange Online **Application RBAC** o el mecanismo equivalente admitido por su tenant, y comprobar que no pueda leer otros buzones.
+4. Crear secreto o credencial autorizada y proporcionar Tenant ID, Client ID y secreto **vía secretos de Cloudflare**, nunca por chat o Git.
+5. Verificar que `exportorders@catenazapata.com` existe como buzón y admite ese acceso.
+6. Probar en `/api/mail/status`, luego `POST /api/mail/sync`. Un Cron lo consultará cada cuatro horas.
+
+> Importante: `Mail.Read` como permiso de aplicación, sin restricción de Exchange, puede leer múltiples buzones de la organización. Restringir el scope *antes* de habilitar el lector. Además, Mail.Read permite al conector técnicamente consultar mensajes, pero nuestro código no hace requests de escritura, envío ni eliminación.
+
+### Loyal
+
+No se inventa un estado `approved`. Hay que recibir de IT/Loyal el endpoint de consulta por código de producto, su autenticación y los estados de aprobación. Hasta entonces, todas las líneas conservan `loyal_status = unknown` y se impide exportar a Worknet.
+
+### Supabase
+
+Proyecto existente: `compras_erp_2025_2026` / ref `wptqxlkpsliexnwpncng` (plan organización Pro). Las tablas `oc_worknet_*` se crearon en este proyecto sin tocar `ordenes_compra`, `proveedores` ni otros módulos. El SQL reproducible está en `sql/001_schema.sql`. Evitar ejecutarlo repetidamente en otra base sin revisar previamente.
+
+El backend utiliza exclusivamente la REST API de Supabase con clave privada; las tablas nuevas tienen RLS habilitada y privilegios revocados para `anon` y `authenticated`.
+
+### Endpoints
+
+- `GET /api/health`: diagnóstico de configuración sin secretos.
+- `GET /api/mail/status`: historial/estados del buzón.
+- `POST /api/mail/sync`: consulta manual del buzón.
+- `GET /api/orders`: lista de órdenes ingresadas.
+- `GET /api/orders/:uuid`: detalle de una OC.
+- `POST /api/import-csv`: importa CSV históricos en formato Worknet.
+- `GET /api/orders/:uuid/download`: bloqueada (409) hasta integración real Loyal + aprobación humana.
+
+Los endpoints operativos exigen temporalmente `Authorization: Bearer <ADMIN_API_TOKEN>`.
+
+## Limitaciones conscientes
+
+- Las OC enviadas por correo quedan almacenadas, pero **no se convierten automáticamente** en CSV hasta agregar extractor y reglas por cliente. El MVP actual sirve para comprobar recepción y corpus de entrenamiento.
+- Archivos individuales y correo original: límite actual de 8 MB; tamaños mayores quedan en error registrado y se reintentan, requiriendo ampliación controlada.
+- Si una importación CSV falla a mitad, puede quedar una OC con líneas incompletas: revisar antes de reintentar. La versión productiva debe usar transacciones RPC en Supabase.
+- El botón de consulta manual del buzón es una operación administrativa; restringirlo a IT y aplicar rate limits.
+- La interfaz es de prueba; la integración final al SSO y permisos por rol de BESA aún es necesaria.
+- No se modificaron Deployments, Workers de producción ni secretos existentes.

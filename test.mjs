@@ -1,0 +1,16 @@
+import fs from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const code=fs.readFileSync(new URL('./src/index.js',import.meta.url),'utf8');
+const ctxt=vm.createContext({console,crypto:globalThis.crypto,Response,TextEncoder,URL});
+vm.runInContext(code.replace(/export default \{async fetch[\s\S]*?\};\nconst PAGE = /,'const PAGE = ')+ '\n globalThis.__test={csvParse,makeCsv,HEADERS,validate};',ctxt);
+const {csvParse,makeCsv,HEADERS,validate}=ctxt.__test;
+const ref=fs.readFileSync(new URL('./fixtures/WINEBOW_11-11.csv',import.meta.url),'utf8');
+const rows=csvParse(ref);
+assert.equal(HEADERS.length,22);assert.equal(rows.length,9);
+assert.equal(rows[0][7],'43');assert.equal(rows[0][13],'67,5');assert.equal(rows[0][10],'2198-25-407');
+assert.equal(validate(rows[0]).length,0);
+assert.equal(JSON.stringify(csvParse(makeCsv(rows))),JSON.stringify(rows));
+assert.throws(()=>csvParse('OC;incorrecto'));
+let bad=[...rows[0]];bad[1]='32/11/2026';assert.ok(validate(bad).length>0);
+console.log('PASS: 22 columnas, 9 líneas, decimales, fechas, CSV roundtrip, rechazo de encabezados y fechas inválidas');

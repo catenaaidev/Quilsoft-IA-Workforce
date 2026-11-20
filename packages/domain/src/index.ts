@@ -2,7 +2,7 @@
 export type TechnicalStatus = 'approved' | 'pending' | 'rejected' | 'missing' | 'unknown';
 export type OrderStatus = 'received' | 'processing' | 'review' | 'blocked' | 'approved' | 'csv_generated' | 'completed' | 'error';
 export type Line = { id?: string; sku: string; description: string; quantity: number; unit: string; unitPrice: number | null; currency: string; technicalStatus: TechnicalStatus };
-export type Order = { id: string; orderNumber: string | null; client: string | null; issuedAt: string | null; status: OrderStatus; version: number; lines?: Line[] };
+export type Order = { id: string; orderNumber: string | null; client: string | null; issuedAt: string | null; priceListCode?: string | null; status: OrderStatus; version: number; lines?: Line[] };
 export type Validation = { ok: boolean; errors: string[]; warnings: string[]; blockers: { sku: string; status: TechnicalStatus }[] };
 export function validateOrder(order: Order, lines: Line[]): Validation {
   const errors: string[] = [];
@@ -38,7 +38,7 @@ export function csvEscape(value: string | number | null | undefined, delimiter =
   if (/[\r\n"]/.test(str) || str.includes(delimiter)) return `"${str.replace(/"/g, '""')}"`;
   return str;
 }
-export type CsvMapping = { validated: boolean; delimiter: ',' | ';' | '\t'; header: boolean; columns: Array<{ column: string; source: 'orderNumber' | 'client' | 'sku' | 'description' | 'quantity' | 'unit' | 'unitPrice' | 'currency' | 'issuedAt' }> };
+export type CsvMapping = { validated: boolean; delimiter: ',' | ';' | '\t'; header: boolean; columns: Array<{ column: string; source: 'orderNumber' | 'client' | 'sku' | 'description' | 'quantity' | 'unit' | 'unitPrice' | 'currency' | 'issuedAt' | 'priceListCode' }> };
 export function generateCsv(order: Order, lines: Line[], mapping: CsvMapping): string {
   if (!mapping.validated) throw new Error('El formato CSV del ERP no fue validado');
   const validation = validateOrder(order, lines);
@@ -48,6 +48,7 @@ export function generateCsv(order: Order, lines: Line[], mapping: CsvMapping): s
     if (source === 'orderNumber') return order.orderNumber;
     if (source === 'client') return order.client;
     if (source === 'issuedAt') return order.issuedAt;
+    if (source === 'priceListCode') return order.priceListCode;
     return line[source];
   };
   const rows = lines.map(line => mapping.columns.map(c => csvEscape(getValue(line, c.source), mapping.delimiter)).join(mapping.delimiter));

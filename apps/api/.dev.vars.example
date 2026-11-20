@@ -11,3 +11,8 @@ GRAPH_CLIENT_SECRET=
 GRAPH_MAILBOX=
 DOC_PROCESSOR_URL=
 DOC_PROCESSOR_TOKEN=
+
+# Loyal: configurar SOLO después de obtener el contrato oficial, permisos de lectura y caso de prueba aprobado.
+# LOYAL_LOOKUP_URL_TEMPLATE=https://loyal.example.invalid/api/products/{sku}/technical-sheet
+# LOYAL_READ_TOKEN=
+# LOYAL_APPROVED_VALUE=

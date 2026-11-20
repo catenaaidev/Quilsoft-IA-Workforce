@@ -1,5 +1,6 @@
 import app from './app';
 import { pollCorporateMailbox } from './graph';
+import { synchronizeLoyal } from './loyal-sync';
 import type { Bindings } from './types';
 export { PurchaseWorkflow } from './workflow';
 export { PurchaseAgent } from './agent';
@@ -18,6 +19,8 @@ export default {
   }
  },
  async scheduled(_event:ScheduledEvent,env:Bindings,ctx:ExecutionContext) {
-  if(env.GRAPH_CLIENT_ID)ctx.waitUntil(pollCorporateMailbox(env));
+  if(env.GRAPH_TENANT_ID&&env.GRAPH_CLIENT_ID&&env.GRAPH_CLIENT_SECRET&&env.GRAPH_MAILBOX)ctx.waitUntil(pollCorporateMailbox(env));
+  // Cron runs every 10 minutes. Only check Loyal every four hours, not on each tick.
+  if(new Date().getUTCHours()%4===0&&new Date().getUTCMinutes()<10)ctx.waitUntil(synchronizeLoyal(env));
  }
 };

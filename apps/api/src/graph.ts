@@ -28,6 +28,22 @@ export async function pollCorporateMailbox(env:Bindings):Promise<{received:numbe
     const existing=await store.by('orders','email_message_id',msg.id,'limit=1');
     // Resume incomplete message ingestion instead of skipping after a partial failure.
     const order=existing[0]||(await store.insert('orders',{order_number:null,client:null,issued_at:null,status:'received',origin:'graph',email_message_id:msg.id,created_by:'system'}))[0];
+    // Conservar el original MIME (.eml) si Microsoft Graph lo permite. Solo lectura.
+    if(!existing.length){
+     try {
+      const emlRes=await fetch(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(msg.id)}/$value`,{headers:{authorization:`Bearer ${token}`}});
+      if(emlRes.ok){
+       const size=Number(emlRes.headers.get('content-length')||0);
+       if(size<=20*1024*1024){
+        const raw=await emlRes.arrayBuffer();
+        if(raw.byteLength>0&&raw.byteLength<=20*1024*1024){
+         await env.DOCS.put(`emails/${order.id}/original.eml`,raw,{httpMetadata:{contentType:'message/rfc822'}});
+         await store.audit('system','email.original_archived','order',order.id,{size:raw.byteLength});
+        }
+       }
+      }
+     }catch{ await store.audit('system','email.archive_pending','order',order.id,{note:'No se pudo conservar EML; revisar autorizacion y logs'}); }
+    }
     const attachments=await graph(`https://graph.microsoft.com/v1.0/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(msg.id)}/attachments`);
     for(const attachment of attachments.value||[]){
       if(attachment['@odata.type']!=='#microsoft.graph.fileAttachment'||!attachment.contentBytes)continue;

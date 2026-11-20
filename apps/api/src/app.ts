@@ -5,6 +5,7 @@ import { validateOrder, generateCsv, sha256Hex, canTransition, matchesFileSignat
 import { authenticate, requirePermission, centralRequest, APP_SESSION_COOKIE, sessionTokenFromCookie } from './auth';
 import { Store } from './store';
 import { checkLoyal } from './loyal';
+import { buildDraftCsv } from './csv-draft';
 import type { Bindings, AppVariables, Actor } from './types';
 const app=new Hono<{Bindings:Bindings;Variables:AppVariables}>();
 const parseUuid=z.string().uuid();
@@ -45,6 +46,19 @@ app.post('/api/sso/logout',async c=>{
 app.route('/api/product-catalog',productCatalog);
 app.use('/api/*',authenticate);
 app.get('/api/me',c=>c.json({actor:c.get('actor'),environment:c.env.APP_ENV}));
+// Simulador VISUAL y aislado: no consulta ni modifica OC, no crea aprobaciones.
+app.get('/api/loyal-simulator',async c=>{try{
+ can(c.get('actor'),'admin.agent');
+ if(c.env.APP_ENV==='production')return c.json({error:'SIMULATOR_DISABLED_IN_PRODUCTION'},403);
+ const sku=z.string().trim().min(1).max(100).parse(c.req.query('sku'));
+ const samples:Record<string,{status:string;stage:string}>={
+  'SKU-OK-1':{status:'approved',stage:'Ficha aprobada (simulada)'},
+  'SKU-PENDING-2':{status:'pending',stage:'En revision de calidad (simulada)'},
+  'SKU-REJECTED-3':{status:'rejected',stage:'Observada (simulada)'},
+  'SKU-MISSING-4':{status:'missing',stage:'Sin ficha (simulada)'}
+ };
+ return c.json({sku,...(samples[sku]||{status:'unknown',stage:'Sin datos (simulado)'}),source:'synthetic',canAuthorize:false});
+ }catch(e){return error(c,e);}});
 
 // Commercial source files: read-only and access-controlled, separate from purchasing approvals.
 app.get('/api/commercial-sources',async c=>{
@@ -107,6 +121,7 @@ app.get('/api/dashboard',async c=>{
 });
 app.get('/api/orders',async c=>{try{can(c.get('actor'),'orders.read');return c.json(await new Store(c.env).listOrders());}catch(e){return error(c,e);}});
 app.post('/api/orders',async c=>{try{
+ if(c.env.APP_ENV==='production')return c.json({error:'ORDERS_ARRIVE_BY_MAIL_ONLY'},403);
  can(c.get('actor'),'orders.write');const body=orderSchema.parse(await c.req.json());
  return c.json(await new Store(c.env).createOrder(body,c.get('actor').subject),201);
  }catch(e){return error(c,e);}});
@@ -142,11 +157,11 @@ app.post('/api/orders/:id/check-loyal',async c=>{try{
  can(c.get('actor'),'orders.write');const id=parseUuid.parse(c.req.param('id')),store=new Store(c.env);
  const record=await store.getOrder(id);if(!record)return c.json({error:'NOT_FOUND'},404);
  const results=[];
- for(const l of record.lines){const result=await checkLoyal(c.env,l.sku,c.get('actor').subject==='local-demo-admin');results.push(result);if(l.id)await store.patch('order_lines',l.id,{technical_status:result.status,technical_checked_at:new Date().toISOString()});}
- const target=results.length && results.every(r=>r.status==='approved')?'review':'blocked';
+ for(const l of record.lines){const result=await checkLoyal(c.env,l.sku,false);results.push(result);if(l.id)await store.patch('order_lines',l.id,{technical_status:result.status,technical_checked_at:new Date().toISOString()});}
+ const target=results.length && results.every(r=>r.status==='approved'&&r.source==='loyal-api')?'review':'blocked';
  if(canTransition(record.order.status,target))await store.transition(record.order,target);
  await store.audit(c.get('actor').subject,'loyal.checked','order',id,{statuses:results.map(r=>({sku:r.sku,status:r.status}))});
- return c.json({results,canApprove:results.length>0&&results.every(r=>r.status==='approved')});
+ return c.json({results,canApprove:results.length>0&&results.every(r=>r.status==='approved'&&r.source==='loyal-api')});
  }catch(e){return error(c,e);}});
 app.post('/api/orders/:id/approve',async c=>{try{
  can(c.get('actor'),'orders.approve');const id=parseUuid.parse(c.req.param('id'));const store=new Store(c.env),record=await store.getOrder(id);
@@ -155,12 +170,30 @@ app.post('/api/orders/:id/approve',async c=>{try{
  const validation=validateOrder(record.order,record.lines);
  if(!validation.ok)return c.json({error:'VALIDATION_BLOCK',validation},409);
  // Last-mile verification: no cached/mocked status can authorize a real purchase.
- const fresh=await Promise.all(record.lines.map(l=>checkLoyal(c.env,l.sku,c.get('actor').subject==='local-demo-admin')));
- if(fresh.some(x=>x.status!=='approved'))return c.json({error:'LOYAL_NOT_VERIFIED',results:fresh},409);
+ const fresh=await Promise.all(record.lines.map(l=>checkLoyal(c.env,l.sku,false)));
+ if(fresh.some(x=>x.status!=='approved'||x.source!=='loyal-api'))return c.json({error:'LOYAL_NOT_VERIFIED',results:fresh},409);
  if(!(await store.transition(record.order,'approved')))return c.json({error:'VERSION_CONFLICT'},409);
  await store.insert('order_approvals',{order_id:id,actor_subject:c.get('actor').subject,decision:'approved',reason:'business+loyal'});
  await store.audit(c.get('actor').subject,'order.approved','order',id,{checks:'business+loyal'});
  return c.json({status:'approved'});
+ }catch(e){return error(c,e);}});
+// Preparado automaticamente tras leer el correo; si se editan datos, se recalcula al descargar.
+// Este BORRADOR no sustituye la exportacion oficial, que sigue bloqueada hasta aprobacion.
+app.get('/api/orders/:id/csv-draft',async c=>{try{
+ can(c.get('actor'),'orders.read');
+ const id=parseUuid.parse(c.req.param('id')),store=new Store(c.env),record=await store.getOrder(id);
+ if(!record)return c.json({error:'NOT_FOUND'},404);
+ if(!record.lines.length)return c.json({error:'NO_EXTRACTED_LINES_YET'},409);
+ const active=await store.mapping();
+ const draft=buildDraftCsv(record.order,record.lines,active?.config||null);
+ if(c.req.query('preview')==='1')return c.json({source:'draft-not-for-erp',columns:draft.columns,rows:draft.rows,missing:draft.missing,officialMapping:draft.officialMapping});
+ await store.audit(c.get('actor').subject,'csv.draft_downloaded','order',id,{officialMapping:draft.officialMapping,missingFields:draft.missing.length});
+ return new Response(draft.content,{headers:{
+  'Content-Type':'text/csv; charset=utf-8',
+  'Content-Disposition':`attachment; filename="BORRADOR-NO-ERP-${id}.csv"`,
+  'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
+  'X-CSV-Draft':'true','X-CSV-Official-Mapping':String(draft.officialMapping)
+ }});
  }catch(e){return error(c,e);}});
 app.post('/api/orders/:id/csv',async c=>{try{
  can(c.get('actor'),'orders.csv');const id=parseUuid.parse(c.req.param('id')),store=new Store(c.env),record=await store.getOrder(id);

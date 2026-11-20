@@ -20,7 +20,7 @@ export default {
  },
  async scheduled(_event:ScheduledEvent,env:Bindings,ctx:ExecutionContext) {
   if(env.GRAPH_TENANT_ID&&env.GRAPH_CLIENT_ID&&env.GRAPH_CLIENT_SECRET&&env.GRAPH_MAILBOX)ctx.waitUntil(pollCorporateMailbox(env));
-  // Cron runs every 10 minutes. Only check Loyal every four hours, not on each tick.
-  if(new Date().getUTCHours()%4===0&&new Date().getUTCMinutes()<10)ctx.waitUntil(synchronizeLoyal(env));
+  // Cron checks mail every minute. Loyal is checked only once every four hours.
+  if(new Date().getUTCHours()%4===0&&new Date().getUTCMinutes()===0)ctx.waitUntil(synchronizeLoyal(env));
  }
 };

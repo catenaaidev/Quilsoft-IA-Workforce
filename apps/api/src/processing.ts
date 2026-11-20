@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { cleanExtractedJson } from '@workforce/domain';
+import { buildDraftCsv } from './csv-draft';
 import { Store } from './store';
 import type { Bindings } from './types';
 const extractedSchema=z.object({
@@ -52,6 +53,22 @@ export async function processDocument(env:Bindings,orderId:string,documentId:str
   if(!current.lines.length && lines.length)await store.addLines(orderId,lines);
   await store.patch('documents',documentId,{extraction_status:'review',extracted_text:content.slice(0,100000),extraction_json:{...extracted,catalogSuggestions}});
   await store.insert('document_extractions',{document_id:documentId,model,extraction:extracted});
+  // Preparar inmediatamente el CSV BORRADOR tras la extraccion automatica.
+  // Nunca se confunde con el CSV autorizado por Loyal + aprobacion humana.
+  try {
+    const updated=await store.getOrder(orderId);
+    if(updated?.lines.length){
+      const active=await store.mapping();
+      const draft=buildDraftCsv(updated.order,updated.lines,active?.config||null);
+      await env.DOCS.put(`drafts/${orderId}/review.csv`,draft.content,{
+        httpMetadata:{contentType:'text/csv; charset=utf-8'},
+        customMetadata:{status:'draft-not-approved',officialMapping:String(draft.officialMapping),missing:String(draft.missing.length)}
+      });
+      await store.audit('system','csv.draft_prepared','order',orderId,{officialMapping:draft.officialMapping,missingFields:draft.missing.length});
+    }
+  } catch(draftError) {
+    await store.audit('system','csv.draft_failed','order',orderId,{reason:String(draftError).slice(0,180)});
+  }
   await store.patch('orders',orderId,{order_number:current.order.orderNumber||extracted.orderNumber,client:current.order.client||extracted.client,issued_at:current.order.issuedAt||extracted.issuedAt,status:'review',updated_at:new Date().toISOString()});
   await store.insert('executions',{agent_slug:'purchase-orders',order_id:orderId,document_id:documentId,status:'review',model,duration_ms:Date.now()-started,finished_at:new Date().toISOString()});
   await store.audit('system','document.extracted','document',documentId,{model,requiresHumanReview:true,catalogSuggestions:catalogSuggestions.filter(x=>x.matches.length>0).length});

@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, Bot, ClipboardList, FileText, LayoutDashboard, Settings2, ShieldCheck, PlugZap, Menu, X, ArrowLeftRight } from 'lucide-react';
 import { useState } from 'react';
+import { PackageSearch } from 'lucide-react';
 import { api,Actor } from './api';
 import { Loading,Notice } from './components';
 const CENTRAL_PORTAL='https://besa-identidad-central.besa-junin.workers.dev/';
@@ -10,6 +11,8 @@ const nav=[
  {to:'/ordenes',name:'Órdenes de compra',icon:ClipboardList},
  {to:'/documentos',name:'Documentos',icon:FileText},
  {to:'/fuentes-comerciales',name:'Fuentes comerciales',icon:FileText},
+ {to:'/maestro-productos',name:'Maestro de productos',icon:PackageSearch},
+ {to:'/listas-precios',name:'Listas de precios',icon:ClipboardList},
  {to:'/agentes',name:'Agentes de IA',icon:Bot},
  {to:'/ejecuciones',name:'Ejecuciones',icon:Activity},
  {to:'/integraciones',name:'Integraciones',icon:PlugZap},

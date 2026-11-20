@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import productCatalog from './product-catalog';
 import { z } from 'zod';
 import { validateOrder, generateCsv, sha256Hex, canTransition, matchesFileSignature } from '@workforce/domain';
 import { authenticate, requirePermission, centralRequest, APP_SESSION_COOKIE, sessionTokenFromCookie } from './auth';
@@ -41,6 +42,7 @@ app.post('/api/sso/logout',async c=>{
  c.header('Cache-Control','no-store');
  return c.json({ok:true});
 });
+app.route('/api/product-catalog',productCatalog);
 app.use('/api/*',authenticate);
 app.get('/api/me',c=>c.json({actor:c.get('actor'),environment:c.env.APP_ENV}));
 
@@ -165,7 +167,9 @@ app.post('/api/orders/:id/csv',async c=>{try{
  if(!record)return c.json({error:'NOT_FOUND'},404);
  if(record.order.status!=='approved')return c.json({error:'ORDER_NOT_APPROVED'},409);
  const mapping=await store.mapping();if(!mapping)return c.json({error:'OFFICIAL_CSV_MAPPING_NOT_VALIDATED'},409);
- const csv=generateCsv(record.order,record.lines,mapping.config);
+ const assignment=await c.env.DB.prepare('SELECT list_code FROM order_price_list_assignments WHERE order_id=?').bind(id).first<{list_code:string}>();
+ if(!assignment?.list_code)return c.json({error:'PRICE_LIST_NOT_CONFIRMED'},409);
+ const csv=generateCsv({...record.order,priceListCode:assignment.list_code},record.lines,mapping.config);
  const key=`csv/${id}/${crypto.randomUUID()}.csv`,bytes=new TextEncoder().encode(csv);
  await c.env.DOCS.put(key,bytes,{httpMetadata:{contentType:'text/csv; charset=utf-8'}});
  const [file]=await store.insert('generated_csvs',{order_id:id,mapping_id:mapping.id,r2_key:key,hash:await sha256Hex(bytes.buffer as ArrayBuffer),generated_by:c.get('actor').subject});
@@ -283,5 +287,7 @@ app.post('/api/erp/masters/import',async c=>{try{
  await store.audit(c.get('actor').subject,'erp.masters_imported','erp',body.kind,{sourceVersion:body.sourceVersion,count:records.length});
  return c.json({imported:records.length,readOnly:true});
  }catch(e){return error(c,e);}});
-app.get('/api/integrations',async c=>{return c.json({graph:c.env.GRAPH_CLIENT_ID&&c.env.GRAPH_MAILBOX?'configured_not_verified':'pending',loyal:'contract_only',erp:'read_only_contract_pending',sso:c.env.IDENTITY?'configured_not_verified':'pending',documentProcessor:c.env.DOC_PROCESSOR_URL?'configured_not_verified':'optional',csvMapping:'requires_official_validated_example'});});
+app.get('/api/integrations',async c=>{return c.json({graph:c.env.GRAPH_TENANT_ID&&c.env.GRAPH_CLIENT_ID&&c.env.GRAPH_CLIENT_SECRET&&c.env.GRAPH_MAILBOX?'configured_not_verified':'pending',loyal:c.env.LOYAL_LOOKUP_URL_TEMPLATE&&c.env.LOYAL_READ_TOKEN&&c.env.LOYAL_APPROVED_VALUE?'configured_not_verified':'pending_official_api',erp:'read_only_contract_pending',sso:c.env.IDENTITY?'configured_not_verified':'pending',documentProcessor:c.env.DOC_PROCESSOR_URL?'configured_not_verified':'optional',csvMapping:'requires_official_validated_example'});});
+import priceListRoutes from './price-list-routes';
+app.route('/api',priceListRoutes);
 export default app;

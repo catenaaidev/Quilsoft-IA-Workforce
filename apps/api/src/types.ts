@@ -7,6 +7,11 @@ export type Bindings = {
   DB: D1Database; // Cloudflare-native temporary database until Supabase is upgraded
   GRAPH_TENANT_ID?:string; GRAPH_CLIENT_ID?:string; GRAPH_CLIENT_SECRET?:string; GRAPH_MAILBOX?:string;
   AI_MODEL?:string; DOC_PROCESSOR_URL?:string; DOC_PROCESSOR_TOKEN?:string;
+  /** Endpoint oficial HTTPS con {sku} para reemplazar el código URL-encoded; consultar, nunca escribir. */
+  LOYAL_LOOKUP_URL_TEMPLATE?:string;
+  LOYAL_READ_TOKEN?:string;
+  /** Valor EXACTO que el proveedor identifica como ficha aprobada (no asumir equivalencias). */
+  LOYAL_APPROVED_VALUE?:string;
   IDENTITY: Fetcher; // service binding to BESA central SSO
   AI: { run: (model:string, input:unknown)=>Promise<unknown>; toMarkdown: (files:any)=>Promise<any> };
   DOCS: R2Bucket; JOBS: Queue<{ orderId: string; documentId: string; runId?: string }>;

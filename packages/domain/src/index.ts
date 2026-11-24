@@ -73,7 +73,19 @@ export function matchesFileSignature(mime:string, bytes:ArrayBuffer):boolean {
   case 'image/webp':return starts([0x52,0x49,0x46,0x46])&&b.length>=12&&String.fromCharCode(...b.slice(8,12))==='WEBP';
   case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
   case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':return starts([0x50,0x4b,0x03,0x04]);
+  case 'application/vnd.ms-excel':case 'application/msword':return starts([0xd0,0xcf,0x11,0xe0,0xa1,0xb1,0x1a,0xe1]);
   case 'text/plain':case 'text/csv':return !b.slice(0,100).includes(0);
   default:return false;
  }
 }
+
+/** Tipo real del archivo por su contenido (no por el nombre ni por lo que declara el correo). */
+export function sniffMime(bytes:ArrayBuffer,filename=''):string|null {
+ const ext=(filename.split('.').pop()||'').toLowerCase();
+ const candidatos:Record<string,string>={pdf:'application/pdf',png:'image/png',jpg:'image/jpeg',jpeg:'image/jpeg',webp:'image/webp',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',xls:'application/vnd.ms-excel',doc:'application/msword',csv:'text/csv',txt:'text/plain'};
+ const porExtension=candidatos[ext];
+ if(porExtension&&matchesFileSignature(porExtension,bytes))return porExtension;
+ for(const m of ['application/pdf','image/png','image/jpeg','image/webp'])if(matchesFileSignature(m,bytes))return m;
+ return null;
+}
+export * from './worknet.js';

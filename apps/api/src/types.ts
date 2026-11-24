@@ -6,7 +6,7 @@ export type Bindings = {
   SSO_ISSUER?:string; SSO_AUDIENCE?:string; SSO_JWKS_URL?:string;
   DB: D1Database; // Cloudflare-native temporary database until Supabase is upgraded
   GRAPH_TENANT_ID?:string; GRAPH_CLIENT_ID?:string; GRAPH_CLIENT_SECRET?:string; GRAPH_MAILBOX?:string;
-  AI_MODEL?:string; DOC_PROCESSOR_URL?:string; DOC_PROCESSOR_TOKEN?:string;
+  AI_MODEL?:string; /** Modelo económico (nivel 2). El avanzado es AI_MODEL. */ AI_MODEL_ECONOMICO?:string; DOC_PROCESSOR_URL?:string; DOC_PROCESSOR_TOKEN?:string;
   /** Endpoint oficial HTTPS con {sku} para reemplazar el código URL-encoded; consultar, nunca escribir. */
   LOYAL_LOOKUP_URL_TEMPLATE?:string;
   LOYAL_READ_TOKEN?:string;

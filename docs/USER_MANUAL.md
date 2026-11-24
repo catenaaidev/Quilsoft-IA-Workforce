@@ -11,3 +11,10 @@
 9. Consultar **Ejecuciones**, **Documentos** y **Auditoría** para resolver bloqueos, errores y conocer el recorrido de cada orden.
 
 No adjuntar información innecesaria. Informar documentos ilegibles al responsable y no forzar aprobaciones. Si la carga no se visualiza, revisar la integración y los estados antes de duplicarla.
+
+## EXPO AI Agent (noviembre 2026)
+
+- **Panel → Qué hacer ahora**: lista priorizada de lo pendiente (OC para revisar, aprobadas sin CSV, bloqueadas, errores) con acceso directo. Al lado, el estado real del correo y de Loyal: "pendiente" significa que todavía no está conectado.
+- **Detalle de la orden → Vista previa de CSV**: borrador Worknet de 22 columnas. Cada celda tiene un color según su origen (de la OC, historial oficial, regla del historial, corregido por una persona, pendiente). Arriba se indica qué cliente Worknet se usó y por qué. Si hay más de un cliente posible, no se elige: confirmá la lista de precios.
+- La orden **no se puede aprobar** mientras el borrador tenga campos pendientes o errores de formato.
+- El **CSV definitivo** solo se habilita después de que un administrador registre una prueba de importación real en Worknet. El CSV nunca se carga solo: lo carga Sebastián a mano.

@@ -11,3 +11,12 @@
 **Backups y recuperación:** configurar snapshots/backup de PostgreSQL, versionado y política de lifecycle de R2, definir RPO/RTO y ensayar restauración antes de producción. El código no instala por sí solo estas políticas.
 
 **Seguridad:** MFA de admins, revocación de sesiones, controles por bodega/proceso, retención, malware, incidentes y gobierno de datos deben ser acordados con Seguridad y Legal antes del despliegue.
+
+## EXPO AI Agent (noviembre 2026)
+
+- **Agentes de IA → métricas reales** del agente de OC: procesadas, para revisar, bloqueadas, errores, tiempo promedio, tokens (los estimados se señalan), costo (solo si hay precios en `ai_model_prices`) y nivel de extracción usado.
+- **Presupuestos de tokens** (por documento, día y mes): se editan en el panel lateral; cada cambio queda en Auditoría. Si se supera, no se llama a la IA y la OC queda para revisión humana.
+- **Consultar buzón ahora**: dispara una lectura manual (además del cron de cada minuto). Si Graph no está configurado, responde que faltan credenciales.
+- **Integraciones → CSV Worknet (22 columnas)**: muestra el historial oficial cargado. "Registrar prueba de importación" se usa solo después de importar en Worknet un CSV generado por la plataforma, con evidencia (quién, cuándo, resultado). Habilita el CSV definitivo y queda auditado.
+- Para mejorar el borrador, importar en **Fuentes comerciales** los CSV Worknet históricos de cada cliente: de ahí salen destino, condición, lista, contenedor, incoterm, nombre corto y cajas por pallet.
+- Despliegue y vuelta atrás: `docs/EXPO_DEPLOY_ROLLBACK.md`. Estado y pruebas: `docs/EXPO_AI_AGENT_ESTADO.md`.

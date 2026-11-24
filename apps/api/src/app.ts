@@ -6,6 +6,8 @@ import { authenticate, requirePermission, centralRequest, APP_SESSION_COOKIE, se
 import { Store } from './store';
 import { checkLoyal } from './loyal';
 import { buildDraftCsv } from './csv-draft';
+import { borradorWorknet, textoCsvWorknet, WORKNET_MAPPING_ID } from './worknet-draft';
+import expoRoutes from './expo-routes';
 import type { Bindings, AppVariables, Actor } from './types';
 const app=new Hono<{Bindings:Bindings;Variables:AppVariables}>();
 const parseUuid=z.string().uuid();
@@ -55,7 +57,8 @@ app.get('/api/loyal-simulator',async c=>{try{
   'SKU-OK-1':{status:'approved',stage:'Ficha aprobada (simulada)'},
   'SKU-PENDING-2':{status:'pending',stage:'En revision de calidad (simulada)'},
   'SKU-REJECTED-3':{status:'rejected',stage:'Observada (simulada)'},
-  'SKU-MISSING-4':{status:'missing',stage:'Sin ficha (simulada)'}
+  'SKU-MISSING-4':{status:'missing',stage:'Sin ficha (simulada)'},
+  'SKU-ERROR-5':{status:'unknown',stage:'Error de conexión con Loyal (simulado): reintentar'}
  };
  return c.json({sku,...(samples[sku]||{status:'unknown',stage:'Sin datos (simulado)'}),source:'synthetic',canAuthorize:false});
  }catch(e){return error(c,e);}});
@@ -169,6 +172,7 @@ app.post('/api/orders/:id/approve',async c=>{try{
  if(record.order.status!=='review')return c.json({error:'INVALID_STATE'},409);
  const validation=validateOrder(record.order,record.lines);
  if(!validation.ok)return c.json({error:'VALIDATION_BLOCK',validation},409);
+ if(!(await store.mapping())){const b=await borradorWorknet(c.env,id);if(b&&(b.draft.missing.length||b.errores.length))return c.json({error:'WORKNET_DRAFT_INCOMPLETE',missing:b.draft.missing,errors:b.errores,client:b.cliente.motivo},409);}
  // Last-mile verification: no cached/mocked status can authorize a real purchase.
  const fresh=await Promise.all(record.lines.map(l=>checkLoyal(c.env,l.sku,false)));
  if(fresh.some(x=>x.status!=='approved'||x.source!=='loyal-api'))return c.json({error:'LOYAL_NOT_VERIFIED',results:fresh},409);
@@ -185,21 +189,39 @@ app.get('/api/orders/:id/csv-draft',async c=>{try{
  if(!record)return c.json({error:'NOT_FOUND'},404);
  if(!record.lines.length)return c.json({error:'NO_EXTRACTED_LINES_YET'},409);
  const active=await store.mapping();
- const draft=buildDraftCsv(record.order,record.lines,active?.config||null);
- if(c.req.query('preview')==='1')return c.json({source:'draft-not-for-erp',columns:draft.columns,rows:draft.rows,missing:draft.missing,officialMapping:draft.officialMapping});
- await store.audit(c.get('actor').subject,'csv.draft_downloaded','order',id,{officialMapping:draft.officialMapping,missingFields:draft.missing.length});
- return new Response(draft.content,{headers:{
-  'Content-Type':'text/csv; charset=utf-8',
-  'Content-Disposition':`attachment; filename="BORRADOR-NO-ERP-${id}.csv"`,
-  'Cache-Control':'no-store','X-Content-Type-Options':'nosniff',
-  'X-CSV-Draft':'true','X-CSV-Official-Mapping':String(draft.officialMapping)
- }});
+ if(active){
+  // Mapeo oficial configurado por administradores: se respeta el mecanismo existente.
+  const draft=buildDraftCsv(record.order,record.lines,active.config);
+  if(c.req.query('preview')==='1')return c.json({source:'draft-not-for-erp',format:'mapping',columns:draft.columns,rows:draft.rows,missing:draft.missing,officialMapping:draft.officialMapping});
+  await store.audit(c.get('actor').subject,'csv.draft_downloaded','order',id,{format:'mapping',missingFields:draft.missing.length});
+  return new Response(draft.content,{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':`attachment; filename="BORRADOR-NO-ERP-${id}.csv"`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-CSV-Draft':'true'}});
+ }
+ // Formato Worknet de 22 columnas, armado sin IA desde la OC y el historial oficial.
+ const b=await borradorWorknet(c.env,id);if(!b)return c.json({error:'NOT_FOUND'},404);
+ const missing=b.draft.missing.map(m=>`Linea ${m.line}: ${m.column}`);
+ if(c.req.query('preview')==='1')return c.json({source:'draft-not-for-erp',format:'worknet-22',columns:[...b.draft.headers],rows:b.draft.rows,origins:b.draft.origins,missing,errors:b.errores,officialMapping:false,client:{code:b.cliente.perfil?.clientCode??null,reason:b.cliente.motivo,candidates:b.cliente.candidatos},history:b.historial});
+ await store.audit(c.get('actor').subject,'csv.draft_downloaded','order',id,{format:'worknet-22',missingFields:missing.length});
+ return new Response(textoCsvWorknet(b.draft.rows),{headers:{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':`attachment; filename="BORRADOR-NO-ERP-${id}.csv"`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','X-CSV-Draft':'true','X-CSV-Format':'worknet-22'}});
  }catch(e){return error(c,e);}});
 app.post('/api/orders/:id/csv',async c=>{try{
  can(c.get('actor'),'orders.csv');const id=parseUuid.parse(c.req.param('id')),store=new Store(c.env),record=await store.getOrder(id);
  if(!record)return c.json({error:'NOT_FOUND'},404);
  if(record.order.status!=='approved')return c.json({error:'ORDER_NOT_APPROVED'},409);
- const mapping=await store.mapping();if(!mapping)return c.json({error:'OFFICIAL_CSV_MAPPING_NOT_VALIDATED'},409);
+ const mapping=await store.mapping();
+ if(!mapping){
+  // CSV oficial Worknet: exige formato validado con una importación real, OC aprobada (Loyal real + persona) y borrador completo.
+  const fmt=await c.env.DB.prepare('SELECT validated FROM erp_csv_mappings WHERE id=?').bind(WORKNET_MAPPING_ID).first<{validated:number}>();
+  if(!fmt?.validated)return c.json({error:'WORKNET_FORMAT_NOT_VALIDATED',detail:'Falta registrar una prueba de importación autorizada en Worknet.'},409);
+  const b=await borradorWorknet(c.env,id);
+  if(!b||b.draft.missing.length||b.errores.length)return c.json({error:'WORKNET_DRAFT_INCOMPLETE',missing:b?.draft.missing??[],errors:b?.errores??[]},409);
+  const texto=textoCsvWorknet(b.draft.rows),bytes=new TextEncoder().encode(texto),key=`csv/${id}/${crypto.randomUUID()}.csv`;
+  await c.env.DOCS.put(key,bytes,{httpMetadata:{contentType:'text/csv; charset=utf-8'},customMetadata:{format:'worknet-22',status:'approved'}});
+  const hash=await sha256Hex(bytes.buffer as ArrayBuffer);
+  const [file]=await store.insert('generated_csvs',{order_id:id,mapping_id:WORKNET_MAPPING_ID,r2_key:key,hash,generated_by:c.get('actor').subject});
+  if(!(await store.transition(record.order,'csv_generated')))return c.json({error:'VERSION_CONFLICT_RECONCILE_EXPORT'},409);
+  await store.audit(c.get('actor').subject,'csv.generated','order',id,{csvId:file.id,format:'worknet-22',sha256:hash,rows:b.draft.rows.length});
+  return c.json({csvId:file.id,status:'pending_manual_erp_upload',format:'worknet-22',sha256:hash});
+ }
  const assignment=await c.env.DB.prepare('SELECT list_code FROM order_price_list_assignments WHERE order_id=?').bind(id).first<{list_code:string}>();
  if(!assignment?.list_code)return c.json({error:'PRICE_LIST_NOT_CONFIRMED'},409);
  const csv=generateCsv({...record.order,priceListCode:assignment.list_code},record.lines,mapping.config);
@@ -320,7 +342,12 @@ app.post('/api/erp/masters/import',async c=>{try{
  await store.audit(c.get('actor').subject,'erp.masters_imported','erp',body.kind,{sourceVersion:body.sourceVersion,count:records.length});
  return c.json({imported:records.length,readOnly:true});
  }catch(e){return error(c,e);}});
-app.get('/api/integrations',async c=>{return c.json({graph:c.env.GRAPH_TENANT_ID&&c.env.GRAPH_CLIENT_ID&&c.env.GRAPH_CLIENT_SECRET&&c.env.GRAPH_MAILBOX?'configured_not_verified':'pending',loyal:c.env.LOYAL_LOOKUP_URL_TEMPLATE&&c.env.LOYAL_READ_TOKEN&&c.env.LOYAL_APPROVED_VALUE?'configured_not_verified':'pending_official_api',erp:'read_only_contract_pending',sso:c.env.IDENTITY?'configured_not_verified':'pending',documentProcessor:c.env.DOC_PROCESSOR_URL?'configured_not_verified':'optional',csvMapping:'requires_official_validated_example'});});
+app.get('/api/integrations',async c=>{
+ let ultima:any=null;try{ultima=await c.env.DB.prepare('SELECT started_at,finished_at,result,error FROM mail_poll_runs ORDER BY started_at DESC LIMIT 1').first();}catch{}
+ const graph=!(c.env.GRAPH_TENANT_ID&&c.env.GRAPH_CLIENT_ID&&c.env.GRAPH_CLIENT_SECRET&&c.env.GRAPH_MAILBOX)?'pending':!ultima?'configured_not_verified':ultima.result==='ok'?'connected':'error';
+ return c.json({graph,graphLastCheck:ultima,loyal:c.env.LOYAL_LOOKUP_URL_TEMPLATE&&c.env.LOYAL_READ_TOKEN&&c.env.LOYAL_APPROVED_VALUE?'configured_not_verified':'pending_official_api',erp:'manual_csv_upload_only',sso:c.env.IDENTITY?'configured_not_verified':'pending',documentProcessor:c.env.DOC_PROCESSOR_URL?'configured_not_verified':'optional',csvMapping:'worknet 22 columnas: ver detalle abajo'});
+});
 import priceListRoutes from './price-list-routes';
 app.route('/api',priceListRoutes);
+app.route('/api',expoRoutes);
 export default app;

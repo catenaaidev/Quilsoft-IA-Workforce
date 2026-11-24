@@ -1,0 +1,79 @@
+Resultados reales — 24/11/2026 08:41 — Windows, v24.22.2
+
+
+> ia-workforce-catena-zapata@0.2.1 test
+> npm run test:domain && npm run test:api && npm run test:oc
+
+
+> ia-workforce-catena-zapata@0.2.1 test:domain
+> npm run build -w @workforce/domain && npm run test -w @workforce/domain
+
+
+> @workforce/domain@0.1.0 build
+> tsc -p tsconfig.json
+
+
+> @workforce/domain@0.1.0 test
+> node --test test/*.test.mjs
+
+✔ orden válida solo si todas las fichas aprobadas (0.7721ms)
+✔ sin documento completo no se aprueba (0.1367ms)
+✔ control de transiciones (0.1113ms)
+✔ CSV exacto con BOM, delimitador, escaping y CRLF (0.289ms)
+✔ CSV sin mapeo oficial se bloquea (0.2162ms)
+✔ la salida IA JSON se parsea, no se confía ciegamente (0.6626ms)
+✔ escapado CSV con delimitador (0.0991ms)
+✔ bloquea inyección de fórmulas en exportación (0.1086ms)
+✔ rechaza archivo disfrazado de PDF (0.2068ms)
+✔ encabezados oficiales: 22 columnas, la 10ª vacía (0.5757ms)
+✔ lee el CSV histórico y aprende perfil de cliente y producto (1.8287ms)
+✔ reproduce las filas del CSV oficial a partir de la OC + historial (sin IA) (1.6603ms)
+✔ sin fuente oficial los campos quedan pendientes (no se inventan) (0.5397ms)
+✔ texto CSV: ";" + CRLF + sin BOM, y se vuelve a leer igual (1.1868ms)
+✔ reglas auxiliares: depósito por sufijo, fechas y tipo de archivo por contenido (0.3404ms)
+ℹ tests 15
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 143.0684
+
+> ia-workforce-catena-zapata@0.2.1 test:api
+> npm run test -w @workforce/api
+
+
+> @workforce/api@0.1.0 test
+> vitest run
+
+
+ RUN  v3.2.7 D:/Proyectos/Implementación Quilsoft IA Workforce/IA_WORKFORCE_CATENA_ZAPATA_COMPLETO/apps/api
+
+ ✓ test/api.spec.ts (3 tests) 17ms
+ ✓ test/expo.spec.ts (15 tests) 284ms
+
+ Test Files  2 passed (2)
+      Tests  18 passed (18)
+   Start at  08:41:06
+   Duration  1.48s (transform 412ms, setup 0ms, collect 1.21s, tests 301ms, environment 0ms, prepare 368ms)
+
+
+> ia-workforce-catena-zapata@0.2.1 test:oc
+> node --test integrations/oc-m365-supabase/tests/*.test.mjs
+
+✔ Worknet CSV preserve 22 exact headers (3.882ms)
+✔ Graph pagination restrict host to Microsoft (1.2851ms)
+✔ No export before Loyal and human approval (54.6175ms)
+ℹ tests 3
+ℹ suites 0
+ℹ pass 3
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 223.527
+
+== npm run build (resumen)
+ℹ duration_ms 140.039
+OK: plataforma completa, frontend, SSO, D1, colas, R2, Agent y Workflow; OC aislado.

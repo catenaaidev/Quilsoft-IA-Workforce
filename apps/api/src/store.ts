@@ -7,7 +7,7 @@ export class Store {
   private async request(table:string, method='GET', query='', body?:unknown, options:Record<string,string>={}) {
     const db=(this.env as Bindings & {DB:D1Database}).DB;
     const known='app_memberships agents agent_instructions orders order_lines documents erp_csv_mappings generated_csvs integration_cursors erp_reference executions audit_events permission_catalog role_permissions agent_tools agent_tool_grants knowledge_sources automations received_emails order_approvals document_extractions integration_registry'.split(' ');
-    const field=(x:string)=>{if(!/^[a-z_]+$/.test(x))throw new Error('D1_INVALID_FIELD');return x;};
+    const field=(x:string)=>{if(!/^[a-z_][a-z0-9_]*$/.test(x))throw new Error('D1_INVALID_FIELD');return x;};
     const val=(k:string,v:any)=>v===undefined?null:typeof v==='boolean'?(v?1:0):['details','extraction','extraction_json','config','metadata','access_policy','tool_contract'].includes(k)?JSON.stringify(v):v;
     const normal=(r:any)=>{const o={...r};for(const k of ['details','extraction','extraction_json','config','metadata','access_policy','tool_contract'])if(typeof o[k]==='string'){try{o[k]=JSON.parse(o[k]);}catch{o[k]=null;}}for(const k of ['active','validated','approved'])if(o[k]!==undefined)o[k]=!!o[k];return o;};
     if(table==='rpc/correct_order_line') {
@@ -46,10 +46,10 @@ export class Store {
     return this.request(table,'PATCH',`id=eq.${encodeURIComponent(id)}${version!==undefined?`&version=eq.${version}`:''}`,data);
   }
   by(table:string,field:string,value:string,more='') {
-    if (!/^[a-z_]+$/.test(field)) throw new Error('Filtro no permitido');
+    if (!/^[a-z_][a-z0-9_]*$/.test(field)) throw new Error('Filtro no permitido');
     return this.request(table,'GET',`${field}=eq.${encodeURIComponent(value)}${more?'&'+more:''}`);
   }
-  rpc(name:string,data:Row){if(!/^[a-z_]+$/.test(name))throw new Error('Invalid RPC');return this.request(`rpc/${name}`,'POST','',data);}
+  rpc(name:string,data:Row){if(!/^[a-z_][a-z0-9_]*$/.test(name))throw new Error('Invalid RPC');return this.request(`rpc/${name}`,'POST','',data);}
   upsert(table:string,data:Row|Row[],conflict:string) { return this.request(table,'POST',`on_conflict=${encodeURIComponent(conflict)}`,data,{Prefer:'resolution=merge-duplicates,return=representation'}); }
   async membership(subject:string) {
     const rows=await this.request('app_memberships','GET',`subject=eq.${encodeURIComponent(subject)}&active=eq.true&limit=1`);

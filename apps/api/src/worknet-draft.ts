@@ -1,5 +1,5 @@
 import {
-  buildWorknetDraft, isWorknetHeader, learnFromHistory, validateWorknetRows, worknetCsvText,
+  buildWorknetDraft, learnFromHistory, toCanonicalRow, worknetLayout, validateWorknetRows, worknetCsvText,
   type ClientProfile, type ProductProfile, type WorknetDraft,
 } from '@workforce/domain';
 import type { Bindings } from './types';
@@ -22,11 +22,13 @@ export function limpiarCacheHistorial() { cache = null; }
 export async function cargarHistorial(env: Bindings, fresco = false): Promise<Historia> {
   if (!fresco && cache && Date.now() - cache.at < 5 * 60_000) return cache.data;
   const fuentes = (await env.DB.prepare(`SELECT id, headers_json FROM workforce_import_sources WHERE kind = 'csv'`).all<{ id: string; headers_json: string }>()).results ?? [];
-  const validas = fuentes.filter((f) => { try { return isWorknetHeader(JSON.parse(f.headers_json)); } catch { return false; } });
+  // Acepta las variantes de 21 y 22 columnas que aparecen en los CSV reales.
+  const validas = fuentes.flatMap((f) => { try { const l = worknetLayout(JSON.parse(f.headers_json)); return l ? [{ ...f, layout: l }] : []; } catch { return []; } });
   const filas: string[][] = [];
   for (const f of validas) {
+    const n = f.layout === 'w21' ? 21 : 22;
     const r = (await env.DB.prepare('SELECT values_json FROM workforce_import_rows WHERE source_id = ? ORDER BY row_number').bind(f.id).all<{ values_json: string }>()).results ?? [];
-    for (const x of r) { try { const v = JSON.parse(x.values_json); if (Array.isArray(v) && v.length === 22) filas.push(v.map(String)); } catch { /* fila inválida: se ignora */ } }
+    for (const x of r) { try { const v = JSON.parse(x.values_json); if (Array.isArray(v) && v.length === n) filas.push(toCanonicalRow(v.map(String), f.layout)); } catch { /* fila inválida: se ignora */ } }
   }
   const { clients, products } = learnFromHistory(filas);
   const data = { clients, products, sources: validas.length, rows: filas.length };

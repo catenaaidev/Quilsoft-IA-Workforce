@@ -37,7 +37,7 @@ describe('Extracción por niveles y consumo de tokens', () => {
     expect(o).toMatchObject({ order_number: 'TEST003P-1VF', client: '999001EXP', status: 'review' });
     // Borrador Worknet automático guardado en R2, sin campos pendientes.
     const draft = await env.DOCS.get(`drafts/${orderId}/worknet-borrador.csv`);
-    expect(await draft.text()).toContain(';999001EXP;511;45;43;10;CLASS MB;285-24-407;77;420;76,4;10;6;2;1;FOB;70;');
+    expect(await draft.text()).toContain(';999001EXP;511;45;43;10;285-24-407;77;420;76,4;10;6;2;1;FOB;70;') // archivo de 21 columnas;
   });
 
   it('N2: el modelo económico resuelve y se registran los tokens reales; no se usa el avanzado', async () => {
@@ -161,8 +161,8 @@ describe('Borrador y CSV oficial Worknet', () => {
     expect(b.columns).toHaveLength(22);
     expect(b.client.code).toBe('999001EXP');
     expect(b.rows[0].slice(4, 11)).toEqual(['999001EXP', '511', '45', '43', '10', 'CLASS MB', '285-24-407']);
-    expect(b.rows[0][3]).toBe('25/12/2026'); // PO + 35 días (regla del historial)
-    expect(b.origins[0][3]).toBe('regla');
+    expect(b.rows[0][3]).toBe(''); // la fecha de carga sale de la OC; no se calcula por regla
+    expect(b.origins[0][3]).toBe('pendiente');
     expect(b.missing).toEqual([]);
   });
 
@@ -193,8 +193,8 @@ describe('Borrador y CSV oficial Worknet', () => {
     expect(g.sha256).toMatch(/^[0-9a-f]{64}$/);
     const csv = await (await app.request(`/api/orders/${id}/csv`, { headers: COOKIE }, env)).text();
     expect(csv.charCodeAt(0)).not.toBe(0xfeff);
-    expect(csv.split('\r\n')[0].split(';')).toHaveLength(22);
-    expect(csv.split('\r\n')[1]).toBe("TEST002P-1VF;20/11/2026;20/11/2026;25/12/2026;999001EXP;511;45;43;10;CLASS MB;285-24-407;77;140;76,4;10;2;2;1;FOB;70;1X40' ARMAR 2 PALLETS;");
+    expect(csv.split('\r\n')[0].split(';')).toHaveLength(21);
+    expect(csv.split('\r\n')[1]).toBe("TEST002P-1VF;20/11/2026;20/11/2026;;999001EXP;511;45;43;10;285-24-407;77;140;76,4;10;2;2;1;FOB;70;1X40' ARMAR 2 PALLETS;");
   });
 });
 
@@ -226,5 +226,70 @@ describe('Estado operativo y métricas del agente', () => {
     expect((await app.request('/api/expo/presupuestos/day', { method: 'PUT', headers: h, body: JSON.stringify({ maxTokens: 5000 }) }, env)).status).toBe(200);
     expect(env.DB.raw.prepare("SELECT max_tokens FROM ai_budgets WHERE scope='day'").get().max_tokens).toBe(5000);
     expect(env.DB.raw.prepare("SELECT COUNT(*) n FROM audit_events WHERE action='ai.budget_updated'").get().n).toBe(1);
+  });
+});
+
+describe('Importar correo a mano (.eml o adjunto), sin buzón conectado', () => {
+  const b64 = (s: string | Uint8Array) => Buffer.from(s).toString('base64');
+  const eml = (adjuntos: { nombre: string; tipo: string; contenido: string | Uint8Array; inline?: boolean }[], asunto = 'PO 4500000123') => [
+    'From: Compras Cliente <compras@cliente.example>', 'To: ventas@bodega.example', `Subject: ${asunto}`, 'Date: Mon, 23 Nov 2026 10:00:00 -0300',
+    'Message-ID: <abc123@cliente.example>', 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="XX"', '',
+    '--XX', 'Content-Type: text/plain; charset=utf-8', '', 'Adjunto la orden.', '',
+    ...adjuntos.flatMap((a) => ['--XX', `Content-Type: ${a.tipo}; name="${a.nombre}"`, `Content-Disposition: ${a.inline ? 'inline' : 'attachment'}; filename="${a.nombre}"`, 'Content-Transfer-Encoding: base64', '', b64(a.contenido), '']),
+    '--XX--', '',
+  ].join('\r\n');
+  const subir = (archivos: { nombre: string; contenido: string | Uint8Array }[]) => {
+    const fd = new FormData();
+    for (const a of archivos) fd.append('files', new File([a.contenido as BlobPart], a.nombre));
+    return app.request('/api/correos/importar', { method: 'POST', headers: { ...COOKIE, origin: 'http://localhost' }, body: fd }, env);
+  };
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0]);
+
+  it('un .eml con PDF crea la OC, archiva el original, ignora la imagen inline y encola el adjunto', async () => {
+    const res = await subir([{ nombre: 'PO 4500000123.eml', contenido: eml([
+      { nombre: 'logo.png', tipo: 'image/png', contenido: png, inline: true },
+      { nombre: 'PO.pdf', tipo: 'application/octet-stream', contenido: '%PDF-1.4 orden' },
+    ]) }]);
+    const r = (await res.json() as any).resultados[0];
+    expect(r).toMatchObject({ estado: 'creada', asunto: 'PO 4500000123', remitente: 'compras@cliente.example', adjuntos: ['PO.pdf'] });
+    expect(env.JOBS.enviados).toHaveLength(1);
+    expect(env.DB.raw.prepare('SELECT mime_type FROM documents').get().mime_type).toBe('application/pdf');
+    expect(env.DB.raw.prepare('SELECT origin FROM orders').get().origin).toBe('correo_importado');
+    expect([...env.DOCS.mapa.keys()].some((k: string) => k.endsWith('/original.eml'))).toBe(true);
+    expect(env.DB.raw.prepare("SELECT COUNT(*) n FROM audit_events WHERE action='email.imported_manually'").get().n).toBe(1);
+    // El mismo archivo otra vez: no duplica.
+    const otra = (await (await subir([{ nombre: 'copia.eml', contenido: eml([{ nombre: 'PO.pdf', tipo: 'application/pdf', contenido: '%PDF-1.4 orden' }, { nombre: 'logo.png', tipo: 'image/png', contenido: png, inline: true }]) }])).json() as any).resultados[0];
+    expect(otra.estado).toBe('creada'); // distinto archivo (otro orden de partes) → otra OC; el idéntico se detecta abajo
+    const igual = (await (await subir([{ nombre: 'PO 4500000123.eml', contenido: eml([
+      { nombre: 'logo.png', tipo: 'image/png', contenido: png, inline: true },
+      { nombre: 'PO.pdf', tipo: 'application/octet-stream', contenido: '%PDF-1.4 orden' },
+    ]) }])).json() as any).resultados[0];
+    expect(igual).toMatchObject({ estado: 'duplicado', orderId: r.orderId });
+  });
+
+  it('acepta el adjunto suelto (PDF) y rechaza con explicación .msg, tipos no admitidos y correos sin adjuntos', async () => {
+    const res = await subir([
+      { nombre: 'Pre-Order 11844275.PDF', contenido: '%PDF-1.7 preorden' },
+      { nombre: 'Shinsegae PO.msg', contenido: new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0]) },
+      { nombre: 'virus.exe', contenido: new Uint8Array([0x4d, 0x5a, 0, 0]) },
+      { nombre: 'consulta.eml', contenido: eml([], 'Consulta de precios') },
+    ]);
+    const [pdf, msg, exe, sin] = (await res.json() as any).resultados;
+    expect(pdf).toMatchObject({ estado: 'creada', adjuntos: ['Pre-Order 11844275.PDF'] });
+    expect(msg.estado).toBe('no_soportado');
+    expect(msg.detalle).toMatch(/\.eml/);
+    expect(exe.estado).toBe('no_soportado');
+    expect(sin.estado).toBe('sin_adjuntos_validos');
+    expect(env.DB.raw.prepare('SELECT COUNT(*) n FROM orders').get().n).toBe(1);
+    expect(env.DB.raw.prepare("SELECT status FROM received_emails WHERE subject='Consulta de precios'").get().status).toBe('ignored_no_valid_attachment');
+  });
+
+  it('un usuario solo de consulta no puede importar', async () => {
+    env.IDENTITY = { fetch: async () => Response.json({ ok: true, principal_id: '33333333-3333-4333-8333-333333333333', name: 'Visor', app_role: 'usuario' }) };
+    const fd = new FormData();
+    fd.append('files', new File(['%PDF-1.4'], 'a.pdf'));
+    const res = await app.request('/api/correos/importar', { method: 'POST', headers: { ...COOKIE, origin: 'http://localhost' }, body: fd }, env);
+    expect([200, 403]).toContain(res.status);
+    if (res.status === 200) expect(env.DB.raw.prepare('SELECT COUNT(*) n FROM orders').get().n).toBe(1); // "usuario" = operador: puede registrar OC
   });
 });

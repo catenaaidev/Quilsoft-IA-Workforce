@@ -1,10 +1,12 @@
 /**
- * CSV Worknet (22 columnas) — código determinístico, sin IA.
+ * CSV Worknet — código determinístico, sin IA.
  *
- * Formato tomado del CSV real cargado manualmente en Worknet (WINEBOW_11-11.csv,
- * importado en "Fuentes comerciales"): separador ";", decimales con coma, fechas
- * DD/MM/AAAA, fin de línea CRLF, sin BOM, 22 columnas (la 10ª con encabezado vacío
- * lleva una abreviatura del producto).
+ * Formato tomado de 15 CSV reales hechos a mano (nov. 2026): separador ";", decimales
+ * con coma, fechas D/M/AAAA sin ceros a la izquierda, fin de línea CRLF, sin BOM.
+ * Aparecen tres variantes: 21 columnas (la mayoría) y 22 con una columna extra de nombre
+ * del producto en la posición 10 (encabezado vacío o "Producto").
+ * Internamente se trabaja siempre con 22 columnas (la 10ª = nombre del producto, útil para
+ * revisar); el archivo para Worknet se genera con las 21 columnas de la variante mayoritaria.
  *
  * Los datos fijos del cliente (destino, condición, lista, descuento, contenedor,
  * tipo de pallet, incoterm) y los datos por producto (abreviatura, cajas por pallet)
@@ -20,36 +22,64 @@ export const WORKNET_HEADERS = [
   'Observaciones Ampliada',
 ] as const;
 
+/** Variante mayoritaria de los CSV reales: sin la columna de nombre del producto. */
+export const WORKNET_HEADERS_OFICIAL: readonly string[] = WORKNET_HEADERS.filter((_, i) => i !== 9);
+
+export type WorknetLayout = 'w21' | 'w22';
+/** Detecta la variante por los encabezados; null si no es un CSV Worknet. */
+export function worknetLayout(row: readonly string[]): WorknetLayout | null {
+  const h = row.map((x) => x.trim());
+  if (h.length === 21 && h.every((x, i) => x === WORKNET_HEADERS_OFICIAL[i])) return 'w21';
+  if (h.length === 22 && ['', 'Producto'].includes(h[9]) && h.every((x, i) => i === 9 || x === WORKNET_HEADERS[i])) return 'w22';
+  return null;
+}
+/** Lleva una fila de cualquier variante a las 22 columnas internas. */
+export function toCanonicalRow(row: readonly string[], layout: WorknetLayout): string[] {
+  return layout === 'w21' ? [...row.slice(0, 9), '', ...row.slice(9)] : [...row];
+}
+
 export const COL = {
   oc: 0, fechaPI: 1, fechaPO: 2, fechaReq: 3, codCliente: 4, destino: 5, condicion: 6, lista: 7, descPedido: 8, abreviatura: 9,
   producto: 10, deposito: 11, cajas: 12, precio: 13, descPct: 14, pallets: 15, contenedor: 16, tipoPallet: 17, incoterm: 18,
   cajasPallet: 19, observaciones: 20, obsAmpliada: 21,
 } as const;
 
-/** Columnas sin las cuales Worknet no puede cargar el pedido. */
-export const WORKNET_REQUIRED = [0, 1, 2, 3, 4, 5, 6, 7, 10, 11, 12, 13, 15, 16, 17, 18, 19] as const;
+/**
+ * Columnas que nunca aparecen vacías en los CSV reales. Fecha PI y Fecha Req. Carga
+ * figuran vacías en CSV que sí se cargaron (Shinsegae), así que no se exigen.
+ */
+export const WORKNET_REQUIRED = [0, 2, 4, 5, 6, 7, 10, 11, 12, 13, 15, 16, 17, 18, 19] as const;
 
 export type Origen = 'oc' | 'historial' | 'regla' | 'persona' | 'pendiente';
 
+/**
+ * Datos fijos del cliente aprendidos del historial. Un campo es null cuando el historial
+ * no es unánime (p. ej. el cliente despacha a varios destinos): queda para que una persona
+ * elija entre `candidates`, nunca se completa con "el más frecuente".
+ */
 export interface ClientProfile {
   clientCode: string;
-  destination: string;
-  conditionCode: string;
+  destination: string | null;
+  conditionCode: string | null;
+  /** Moda (se usa para vincular el cliente con su lista de precios, no para completar). */
   priceListCode: string;
-  orderDiscount: string;
-  lineDiscount: string;
-  container: string;
-  palletType: string;
-  incoterm: string;
-  /** Días entre Fecha PO y Fecha Req. Carga observados en el historial (moda). */
-  reqLoadDays: number | null;
+  orderDiscount: string | null;
+  lineDiscount: string | null;
+  container: string | null;
+  palletType: string | null;
+  incoterm: string | null;
+  deposit: string | null;
+  candidates: Partial<Record<'destination' | 'conditionCode' | 'orderDiscount' | 'lineDiscount' | 'container' | 'palletType' | 'incoterm' | 'deposit', string[]>>;
   samples: number;
 }
 
 export interface ProductProfile {
   sku: string;
   shortName: string;
+  /** Unánime en el historial del producto; null si varía. */
   boxesPerPallet: number | null;
+  /** Cajas por pallet observadas para cada cliente (unánimes por cliente). */
+  boxesPerPalletByClient?: Record<string, number>;
 }
 
 const mode = (values: string[]): string => {
@@ -57,19 +87,40 @@ const mode = (values: string[]): string => {
   for (const v of values.map((x) => x.trim()).filter(Boolean)) c.set(v, (c.get(v) ?? 0) + 1);
   return [...c.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
 };
+/** Valores distintos (sin vacíos). Los códigos numéricos se comparan sin ceros a la izquierda ("002" = "2"). */
+const distintos = (values: string[]): string[] => {
+  const vistos = new Map<string, string>();
+  for (const v of values.map((x) => x.trim()).filter(Boolean)) {
+    const k = /^\d+$/.test(v) ? String(Number(v)) : v;
+    if (!vistos.has(k)) vistos.set(k, v);
+  }
+  return [...vistos.values()];
+};
+/** Mínimo de órdenes distintas que deben coincidir para completar un dato desde el historial. */
+export const MIN_ORDENES_COINCIDENTES = 2;
+/**
+ * El valor solo si es unánime en al menos MIN_ORDENES_COINCIDENTES órdenes distintas; si no, null.
+ * Con una sola orden previa no hay evidencia de que el dato sea fijo (en las pruebas con CSV
+ * reales, destino, contenedor e incoterm cambiaban entre la 1ª y la 2ª orden del cliente).
+ */
+const unanimeEn = (rs: string[][], col: number): string | null => {
+  const values = rs.map((r) => r[col]);
+  const ordenes = new Set(rs.filter((r) => r[col]?.trim()).map((r) => r[COL.oc].trim()));
+  return distintos(values).length === 1 && ordenes.size >= MIN_ORDENES_COINCIDENTES ? mode(values) : null;
+};
 
 export function parseDmy(v: string): Date | null {
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(v.trim());
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(v.trim());
   if (!m) return null;
   const d = new Date(Date.UTC(+m[3], +m[2] - 1, +m[1]));
   return d.getUTCDate() === +m[1] ? d : null;
 }
 
 export function formatDmy(d: Date): string {
-  return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCMonth() + 1).padStart(2, '0')}/${d.getUTCFullYear()}`;
+  return `${d.getUTCDate()}/${d.getUTCMonth() + 1}/${d.getUTCFullYear()}`;
 }
 
-/** Fecha ISO (AAAA-MM-DD) → DD/MM/AAAA, o null si no es válida. */
+/** Fecha ISO (AAAA-MM-DD) → D/M/AAAA (como en los CSV hechos a mano), o null si no es válida. */
 export function isoToDmy(v: string | null | undefined): string | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(v ?? ''));
   if (!m) return null;
@@ -79,9 +130,9 @@ export function isoToDmy(v: string | null | undefined): string | null {
 
 export const decimalComma = (n: number): string => String(Math.round(n * 10000) / 10000).replace('.', ',');
 
-/** Valida que unas filas tengan exactamente los encabezados oficiales. */
+/** Valida que unos encabezados correspondan a alguna variante de CSV Worknet. */
 export function isWorknetHeader(row: readonly string[]): boolean {
-  return row.length === 22 && row.every((x, i) => x.trim() === WORKNET_HEADERS[i]);
+  return worknetLayout(row) !== null;
 }
 
 /** Aprende el perfil fijo de cada cliente y de cada producto desde CSV históricos oficiales. */
@@ -93,19 +144,17 @@ export function learnFromHistory(rows: string[][]): { clients: Map<string, Clien
     porCliente.set(k, [...(porCliente.get(k) ?? []), r]);
   }
   const clients = new Map<string, ClientProfile>();
+  const campos = { destination: COL.destino, conditionCode: COL.condicion, orderDiscount: COL.descPedido, lineDiscount: COL.descPct, container: COL.contenedor, palletType: COL.tipoPallet, incoterm: COL.incoterm, deposit: COL.deposito } as const;
   for (const [code, rs] of porCliente) {
-    const dias = rs.map((r) => {
-      const po = parseDmy(r[COL.fechaPO]), req = parseDmy(r[COL.fechaReq]);
-      return po && req ? String(Math.round((req.getTime() - po.getTime()) / 86400000)) : '';
-    });
-    const d = mode(dias);
-    clients.set(code, {
-      clientCode: code, destination: mode(rs.map((r) => r[COL.destino])), conditionCode: mode(rs.map((r) => r[COL.condicion])),
-      priceListCode: mode(rs.map((r) => r[COL.lista])), orderDiscount: mode(rs.map((r) => r[COL.descPedido])),
-      lineDiscount: mode(rs.map((r) => r[COL.descPct])), container: mode(rs.map((r) => r[COL.contenedor])),
-      palletType: mode(rs.map((r) => r[COL.tipoPallet])), incoterm: mode(rs.map((r) => r[COL.incoterm])),
-      reqLoadDays: d ? Number(d) : null, samples: rs.length,
-    });
+    const perfil: ClientProfile = {
+      clientCode: code, destination: null, conditionCode: null, priceListCode: mode(rs.map((r) => r[COL.lista])), orderDiscount: null,
+      lineDiscount: null, container: null, palletType: null, incoterm: null, deposit: null, candidates: {}, samples: rs.length,
+    };
+    for (const [campo, col] of Object.entries(campos) as [keyof typeof campos, number][]) {
+      perfil[campo] = unanimeEn(rs, col);
+      if (perfil[campo] === null) perfil.candidates[campo] = distintos(rs.map((r) => r[col]));
+    }
+    clients.set(code, perfil);
   }
   const products = new Map<string, ProductProfile>();
   const porSku = new Map<string, string[][]>();
@@ -113,9 +162,14 @@ export function learnFromHistory(rows: string[][]): { clients: Map<string, Clien
     const sku = r[COL.producto]?.trim();
     if (r.length === 22 && sku) porSku.set(sku, [...(porSku.get(sku) ?? []), r]);
   }
+  const entero = (v: string | null) => (v && /^\d+$/.test(v) ? Number(v) : null);
   for (const [sku, rs] of porSku) {
-    const cxp = mode(rs.map((r) => r[COL.cajasPallet]));
-    products.set(sku, { sku, shortName: mode(rs.map((r) => r[COL.abreviatura])), boxesPerPallet: /^\d+$/.test(cxp) ? Number(cxp) : null });
+    const porCli: Record<string, number> = {};
+    for (const cli of new Set(rs.map((r) => r[COL.codCliente].trim()))) {
+      const n = entero(unanimeEn(rs.filter((r) => r[COL.codCliente].trim() === cli), COL.cajasPallet));
+      if (n !== null) porCli[cli] = n;
+    }
+    products.set(sku, { sku, shortName: mode(rs.map((r) => r[COL.abreviatura])), boxesPerPallet: entero(unanimeEn(rs, COL.cajasPallet)), boxesPerPalletByClient: porCli });
   }
   return { clients, products };
 }
@@ -124,7 +178,7 @@ export function learnFromHistory(rows: string[][]): { clients: Map<string, Clien
 export function depositFromOrderNumber(orderNumber: string | null | undefined): string | null {
   const v = String(orderNumber ?? '').trim().toUpperCase();
   if (/VF$/.test(v)) return '77';
-  if (/J$/.test(v)) return '15';
+  if (/(JU|J)$/.test(v)) return '15'; // en los CSV reales: "...JU" / "...ju" → 15
   return null;
 }
 
@@ -152,24 +206,21 @@ export function buildWorknetDraft(input: DraftInput): WorknetDraft {
   const missing: WorknetDraft['missing'] = [];
   const pi = isoToDmy(input.receivedAt) ?? isoToDmy(input.issuedAt);
   const po = isoToDmy(input.issuedAt);
-  let req = isoToDmy(input.requestedLoadAt ?? null);
-  let reqOrigin: Origen = req ? 'oc' : 'pendiente';
-  if (!req && po && input.client?.reqLoadDays != null) {
-    const d = parseDmy(po)!;
-    d.setUTCDate(d.getUTCDate() + input.client.reqLoadDays);
-    req = formatDmy(d);
-    reqOrigin = 'regla';
-  }
-  const deposit = depositFromOrderNumber(input.orderNumber);
+  // La fecha de carga varía por orden (sale de la fecha de despacho de la OC): no se calcula por regla.
+  const req = isoToDmy(input.requestedLoadAt ?? null);
+  const reqOrigin: Origen = req ? 'oc' : 'pendiente';
   const c = input.client;
+  const depSufijo = depositFromOrderNumber(input.orderNumber);
+  const deposit = depSufijo ?? c?.deposit ?? null;
+  const depOrigin: Origen = depSufijo ? 'regla' : 'historial';
   for (const [i, l] of input.lines.entries()) {
-    const cxp = l.product?.boxesPerPallet ?? null;
+    const cxp = (c && l.product?.boxesPerPalletByClient?.[c.clientCode]) ?? l.product?.boxesPerPallet ?? null;
     const pallets = l.quantity !== null && l.quantity > 0 && cxp ? Math.ceil(l.quantity / cxp) : null;
     const celdas: [string | null, Origen][] = [
       [input.orderNumber?.trim() || null, 'oc'], [pi, 'oc'], [po, 'oc'], [req, reqOrigin],
       [c?.clientCode || null, 'historial'], [c?.destination || null, 'historial'], [c?.conditionCode || null, 'historial'],
       [c?.priceListCode || null, 'historial'], [c?.orderDiscount ?? null, 'historial'], [l.product?.shortName || null, 'historial'],
-      [l.sku?.trim() || null, 'oc'], [deposit, 'regla'], [l.quantity !== null && l.quantity > 0 ? String(l.quantity) : null, 'oc'],
+      [l.sku?.trim() || null, 'oc'], [deposit, depOrigin], [l.quantity !== null && l.quantity > 0 ? String(l.quantity) : null, 'oc'],
       [l.unitPrice !== null && l.unitPrice >= 0 ? decimalComma(l.unitPrice) : null, 'oc'], [c?.lineDiscount ?? null, 'historial'],
       [pallets !== null ? String(pallets) : null, 'regla'], [c?.container || null, 'historial'], [c?.palletType || null, 'historial'],
       [c?.incoterm || null, 'historial'], [cxp !== null ? String(cxp) : null, 'historial'], [input.observations?.trim() || null, 'oc'],
@@ -198,9 +249,10 @@ export function validateWorknetRows(rows: string[][]): string[] {
   return errors;
 }
 
-/** Texto CSV como el que acepta Worknet: ";" , CRLF, sin BOM. */
+/** Texto CSV para Worknet: 21 columnas (variante mayoritaria), ";", CRLF, sin BOM. Recibe filas internas de 22. */
 export function worknetCsvText(rows: string[][]): string {
-  return [WORKNET_HEADERS as readonly string[], ...rows].map((r) => r.map((v) => csvEscape(v, ';')).join(';')).join('\r\n') + '\r\n';
+  const salida = rows.map((r) => r.filter((_, i) => i !== 9));
+  return [WORKNET_HEADERS_OFICIAL, ...salida].map((r) => r.map((v) => csvEscape(v, ';')).join(';')).join('\r\n') + '\r\n';
 }
 
 /** Lee un CSV Worknet (para importar historial o leer una OC que ya viene en ese formato, sin IA). */
@@ -217,8 +269,10 @@ export function parseWorknetCsv(text: string): string[][] {
   }
   if (quoted) throw new Error('CSV: comillas sin cerrar');
   if (cell || row.length) { row.push(cell); rows.push(row); }
-  if (!rows.length || !isWorknetHeader(rows[0])) throw new Error('Los encabezados no coinciden con las 22 columnas de Worknet');
+  const layout = rows.length ? worknetLayout(rows[0]) : null;
+  if (!layout) throw new Error('Los encabezados no coinciden con el formato Worknet (21 o 22 columnas)');
+  const n = layout === 'w21' ? 21 : 22;
   const datos = rows.slice(1);
-  if (datos.some((r) => r.length !== 22)) throw new Error('Hay líneas que no tienen 22 columnas');
-  return datos;
+  if (datos.some((r) => r.length !== n)) throw new Error(`Hay líneas que no tienen ${n} columnas`);
+  return datos.map((r) => toCanonicalRow(r, layout));
 }

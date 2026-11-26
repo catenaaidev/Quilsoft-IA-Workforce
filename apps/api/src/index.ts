@@ -1,6 +1,7 @@
 import app from './app';
 import { pollCorporateMailbox } from './graph';
 import { synchronizeLoyal } from './loyal-sync';
+import { processDocument } from './processing';
 import type { Bindings } from './types';
 export { PurchaseWorkflow } from './workflow';
 export { PurchaseAgent } from './agent';
@@ -14,7 +15,14 @@ export default {
    }catch(e){
     // Already-created Workflow => same document is being processed, do not launch twice.
     if(/already exists|conflict|duplicate/i.test(String(e)))message.ack();
-    else message.retry();
+    else {
+     console.error('QUEUE_WORKFLOW_CREATE_FAILED', message.body.documentId, message.attempts, String((e as Error)?.message ?? e).slice(0, 300));
+     // Respaldo: el Workflow solo envuelve processDocument. Si no se puede crear, se procesa acá.
+     if(message.attempts>=2){
+      try{ await processDocument(env,message.body.orderId,message.body.documentId); message.ack(); }
+      catch(err){ console.error('QUEUE_DIRECT_PROCESS_FAILED', message.body.documentId, String((err as Error)?.message ?? err).slice(0, 300)); message.retry(); }
+     } else message.retry();
+    }
    }
   }
  },

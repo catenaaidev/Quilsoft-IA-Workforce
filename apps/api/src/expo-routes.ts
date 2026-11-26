@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { requirePermission } from './auth';
 import { Store } from './store';
 import { pollCorporateMailbox } from './graph';
-import { cargarHistorial, WORKNET_MAPPING_ID } from './worknet-draft';
+import { cargarHistorial, limpiarCacheHistorial, WORKNET_MAPPING_ID } from './worknet-draft';
+import { parseWorknetCsv, sha256Hex, WORKNET_HEADERS } from '@workforce/domain';
 import type { Bindings, AppVariables } from './types';
 
 /**
@@ -143,6 +144,47 @@ routes.post('/expo/formato-worknet/validar', async (c) => {
     if (!r.meta.changes) throw new Error('Falta aplicar la migración 0007 (formato Worknet).');
     await new Store(c.env).audit(c.get('actor').subject, 'csv.worknet_format_validated', 'erp_csv_mapping', WORKNET_MAPPING_ID, { evidencia });
     return c.json({ ok: true });
+  } catch (e) { return fail(c, e); }
+});
+
+/** Texto de un CSV: UTF-8 si es válido; si no, Windows-1252/Latin-1 (como guarda Excel en Windows). */
+export function decodificarCsv(bytes: Uint8Array): string {
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); } catch { /* no es UTF-8 */ }
+  let s = '';
+  for (let i = 0; i < bytes.length; i += 8192) s += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return s;
+}
+
+/**
+ * Carga CSV Worknet hechos a mano como historial ("Fuentes comerciales"). De ahí salen los datos
+ * fijos de cada cliente y producto para los borradores. Acepta las variantes de 21 y 22 columnas.
+ * El mismo archivo no se carga dos veces (id = SHA-256 del contenido).
+ */
+routes.post('/expo/historial-worknet', async (c) => {
+  try {
+    requirePermission(c.get('actor'), 'admin.agent');
+    const form = await c.req.formData();
+    const files = form.getAll('files').filter((f): f is File => typeof f !== 'string');
+    if (!files.length || files.length > 50) return c.json({ error: 'Enviá entre 1 y 50 archivos CSV' }, 400);
+    const resultados: { archivo: string; estado: 'cargado' | 'ya_cargado' | 'invalido'; filas?: number; detalle?: string }[] = [];
+    for (const f of files) {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      if (bytes.length > 5 * 1024 * 1024) { resultados.push({ archivo: f.name, estado: 'invalido', detalle: 'Mayor a 5 MB' }); continue; }
+      let filas: string[][];
+      try { filas = parseWorknetCsv(decodificarCsv(bytes)).filter((r) => r.some((v) => v.trim())); }
+      catch (e) { resultados.push({ archivo: f.name, estado: 'invalido', detalle: String((e as Error).message).slice(0, 160) }); continue; }
+      const id = `worknet-${(await sha256Hex(bytes.buffer as ArrayBuffer)).slice(0, 32)}`;
+      const ya = await c.env.DB.prepare('SELECT id FROM workforce_import_sources WHERE id = ?').bind(id).first();
+      if (ya) { resultados.push({ archivo: f.name, estado: 'ya_cargado', filas: filas.length }); continue; }
+      const stmts = [c.env.DB.prepare(`INSERT INTO workforce_import_sources(id,filename,kind,sheet_name,headers_json,imported_at) VALUES (?,?,'csv','Worknet',?,?)`)
+        .bind(id, f.name.slice(0, 200), JSON.stringify(WORKNET_HEADERS), new Date().toISOString())];
+      filas.forEach((r, i) => stmts.push(c.env.DB.prepare('INSERT INTO workforce_import_rows(source_id,row_number,values_json) VALUES (?,?,?)').bind(id, i + 2, JSON.stringify(r))));
+      await c.env.DB.batch(stmts);
+      resultados.push({ archivo: f.name, estado: 'cargado', filas: filas.length });
+    }
+    limpiarCacheHistorial();
+    await new Store(c.env).audit(c.get('actor').subject, 'worknet.history_imported', 'commercial_source', 'worknet', { resultados });
+    return c.json({ resultados });
   } catch (e) { return fail(c, e); }
 });
 

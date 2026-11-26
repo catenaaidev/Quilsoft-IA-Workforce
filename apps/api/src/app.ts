@@ -8,6 +8,7 @@ import { checkLoyal } from './loyal';
 import { buildDraftCsv } from './csv-draft';
 import { borradorWorknet, textoCsvWorknet, WORKNET_MAPPING_ID } from './worknet-draft';
 import expoRoutes from './expo-routes';
+import importarCorreoRoutes from './importar-correo';
 import type { Bindings, AppVariables, Actor } from './types';
 const app=new Hono<{Bindings:Bindings;Variables:AppVariables}>();
 const parseUuid=z.string().uuid();
@@ -350,4 +351,5 @@ app.get('/api/integrations',async c=>{
 import priceListRoutes from './price-list-routes';
 app.route('/api',priceListRoutes);
 app.route('/api',expoRoutes);
+app.route('/api',importarCorreoRoutes);
 export default app;

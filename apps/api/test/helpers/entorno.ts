@@ -86,6 +86,8 @@ export const HEADERS = ['OC', 'Fecha PI', 'Fecha PO', 'Fecha Req. Carga', 'Cod. 
 export const HIST = [
   ['TEST001P-1VF', '10/11/2026', '10/11/2026', '15/12/2026', '999001EXP', '511', '45', '43', '10', 'CAT ALT MB', '2191-23-407', '77', '140', '89,25', '10', '1', '2', '1', 'FOB', '140', "1X40' ARMAR 2 PALLETS", ''],
   ['TEST001P-1VF', '10/11/2026', '10/11/2026', '15/12/2026', '999001EXP', '511', '45', '43', '10', 'CLASS MB', '285-24-407', '77', '420', '76,4', '10', '6', '2', '1', 'FOB', '70', "1X40' ARMAR 2 PALLETS", ''],
+  // Segunda orden del mismo cliente: un dato se completa desde el historial solo si coinciden ≥2 órdenes.
+  ['TEST000P-1VF', '1/9/2026', '1/9/2026', '8/10/2026', '999001EXP', '511', '45', '43', '10', 'CLASS MB', '285-24-407', '77', '140', '76,4', '10', '2', '2', '1', 'FOB', '70', 'ARMAR 2 PALLETS', ''],
 ];
 
 export function cargarHistorial(env: any) {

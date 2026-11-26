@@ -160,3 +160,63 @@ export function FormatoWorknet() {
 export const nombresOrigen: Record<string, string> = { oc: 'De la OC', historial: 'Historial oficial', regla: 'Regla del historial', persona: 'Corregido por una persona', pendiente: 'Pendiente' };
 const fondoOrigen: Record<string, string> = { historial: 'bg-sky-50', regla: 'bg-violet-50', persona: 'bg-green-50', pendiente: 'bg-amber-50 text-amber-700' };
 export function celdaOrigen(origen?: string) { return origen ? fondoOrigen[origen] ?? '' : ''; }
+
+type ResultadoImportacion = { archivo: string; estado: 'creada' | 'duplicado' | 'sin_adjuntos_validos' | 'no_soportado' | 'error'; orderId?: string; asunto?: string; remitente?: string | null; adjuntos?: string[]; detalle?: string };
+const textoEstado: Record<ResultadoImportacion['estado'], string> = { creada: 'OC creada', duplicado: 'Ya importado', sin_adjuntos_validos: 'Sin adjuntos de OC', no_soportado: 'No admitido', error: 'Error' };
+
+/** Importación manual: arrastrar el correo (.eml) o el adjunto (PDF, Excel, Word, imagen, CSV). */
+export function ImportarCorreo() {
+  const qc = useQueryClient();
+  const [arrastrando, setArrastrando] = useState(false);
+  const [resultados, setResultados] = useState<ResultadoImportacion[]>([]);
+  const subir = useMutation({
+    mutationFn: async (files: File[]) => {
+      const fd = new FormData();
+      for (const f of files) fd.append('files', f);
+      return api<{ resultados: ResultadoImportacion[] }>('/correos/importar', { method: 'POST', body: fd });
+    },
+    onSuccess: (r) => { setResultados(r.resultados); for (const k of ['orders', 'dashboard', 'expo-estado', 'agente-metricas']) qc.invalidateQueries({ queryKey: [k] }); },
+  });
+  const enviar = (lista: FileList | null) => { const files = [...(lista ?? [])].slice(0, 20); if (files.length) subir.mutate(files); };
+  return <section className="panel mb-6 p-5">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div><h2 className="flex items-center gap-2 font-bold"><Inbox size={18} /> Importar correo de OC</h2>
+        <p className="mt-1 text-sm text-slate-600">Mientras el buzón exportorders no esté conectado: arrastrá el correo guardado (.eml) o el adjunto de la orden (PDF, Excel, Word, imagen o CSV). La plataforma crea la OC, la lee y arma el borrador Worknet para revisar.</p></div>
+    </div>
+    <label
+      onDragOver={(e) => { e.preventDefault(); setArrastrando(true); }} onDragLeave={() => setArrastrando(false)}
+      onDrop={(e) => { e.preventDefault(); setArrastrando(false); enviar(e.dataTransfer.files); }}
+      className={`mt-4 flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed p-6 text-center text-sm transition ${arrastrando ? 'border-brand-600 bg-teal-50' : 'border-slate-300 hover:bg-slate-50'}`}>
+      <span className="font-semibold text-slate-800">{subir.isPending ? 'Importando…' : 'Soltá acá los archivos o hacé clic para elegirlos'}</span>
+      <span className="mt-1 text-xs text-slate-500">Hasta 20 archivos de 20 MB. En Outlook web: abrir el correo → ⋯ → Descargar. Los .msg todavía no se leen: arrastrá el adjunto.</span>
+      <input type="file" multiple hidden disabled={subir.isPending} accept=".eml,.msg,.pdf,.xlsx,.xls,.docx,.doc,.csv,.txt,.png,.jpg,.jpeg,.webp" onChange={(e) => { enviar(e.target.files); e.target.value = ''; }} />
+    </label>
+    {subir.isError && <div className="mt-3"><Notice kind="error">{String(subir.error)}</Notice></div>}
+    {resultados.length > 0 && <ul className="mt-4 divide-y rounded-lg border text-sm">{resultados.map((r, i) =>
+      <li key={i} className="flex flex-wrap items-center justify-between gap-2 p-3">
+        <div className="min-w-0"><div className="truncate font-semibold">{r.asunto || r.archivo}</div>
+          <div className="text-xs text-slate-500">{[r.remitente, r.adjuntos?.join(', '), r.detalle].filter(Boolean).join(' · ')}</div></div>
+        <div className="flex items-center gap-3"><Etiqueta valor={r.estado === 'creada' ? 'conectado' : r.estado === 'duplicado' ? 'configurado' : r.estado === 'error' ? 'error' : 'pendiente'} />
+          <span className="text-xs text-slate-600">{textoEstado[r.estado]}</span>
+          {r.orderId && <Link className="font-semibold text-brand-600" to={`/ordenes/${r.orderId}`}>Abrir</Link>}</div>
+      </li>)}</ul>}
+  </section>;
+}
+
+/** Carga de CSV Worknet hechos a mano como historial (administradores). */
+export function CargarHistorialWorknet() {
+  const qc = useQueryClient();
+  const [resultados, setResultados] = useState<{ archivo: string; estado: string; filas?: number; detalle?: string }[]>([]);
+  const subir = useMutation({
+    mutationFn: async (files: File[]) => { const fd = new FormData(); for (const f of files) fd.append('files', f); return api<{ resultados: typeof resultados }>('/expo/historial-worknet', { method: 'POST', body: fd }); },
+    onSuccess: (r) => { setResultados(r.resultados); qc.invalidateQueries({ queryKey: ['formato-worknet'] }); qc.invalidateQueries({ queryKey: ['commercial-sources'] }); },
+  });
+  return <section className="panel mt-5 p-6 text-sm">
+    <h2 className="font-bold">Cargar CSV Worknet históricos</h2>
+    <p className="mt-1 text-slate-600">Subí los CSV que se cargaron a mano en Worknet (21 o 22 columnas). Con ellos se completan los datos fijos de cada cliente y producto. Un mismo archivo no se carga dos veces.</p>
+    <label className={`btn-secondary mt-3 ${subir.isPending ? 'opacity-50' : ''}`}>{subir.isPending ? 'Cargando…' : 'Elegir archivos CSV'}
+      <input type="file" multiple hidden accept=".csv" disabled={subir.isPending} onChange={(e) => { const f = [...(e.target.files ?? [])]; if (f.length) subir.mutate(f); e.target.value = ''; }} /></label>
+    {subir.isError && <div className="mt-3"><Notice kind="error">{String(subir.error)}</Notice></div>}
+    {resultados.length > 0 && <ul className="mt-3 space-y-1">{resultados.map((r, i) => <li key={i}><strong>{r.archivo}</strong>: {r.estado.replaceAll('_', ' ')}{r.filas !== undefined ? ` (${r.filas} filas)` : ''}{r.detalle ? ` · ${r.detalle}` : ''}</li>)}</ul>}
+  </section>;
+}
